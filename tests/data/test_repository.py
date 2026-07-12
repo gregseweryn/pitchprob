@@ -27,13 +27,19 @@ def session():
 
 
 def test_league_get_or_create_idempotent(session: Session) -> None:
-    a = LeagueRepository.get_or_create(session, code="E0", name="Premier League", country="England")
-    b = LeagueRepository.get_or_create(session, code="E0", name="Premier League", country="England")
+    a = LeagueRepository.get_or_create(
+        session, code="E0", name="Premier League", country="England"
+    )
+    b = LeagueRepository.get_or_create(
+        session, code="E0", name="Premier League", country="England"
+    )
     assert a.id == b.id
 
 
 def test_season_get_or_create_idempotent(session: Session) -> None:
-    league = LeagueRepository.get_or_create(session, code="E0", name="Premier League", country="England")
+    league = LeagueRepository.get_or_create(
+        session, code="E0", name="Premier League", country="England"
+    )
     a = SeasonRepository.get_or_create(session, league_id=league.id, start_year=2023)
     b = SeasonRepository.get_or_create(session, league_id=league.id, start_year=2023)
     assert a.id == b.id
@@ -65,10 +71,16 @@ def test_team_resolve_or_create_creates_once(session: Session) -> None:
 
 
 def _fixture_ids(session: Session) -> tuple[int, int, int]:
-    league = LeagueRepository.get_or_create(session, code="E0", name="Premier League", country="England")
+    league = LeagueRepository.get_or_create(
+        session, code="E0", name="Premier League", country="England"
+    )
     season = SeasonRepository.get_or_create(session, league_id=league.id, start_year=2023)
-    home = TeamRepository.resolve_or_create(session, source="football-data", alias="Arsenal", country="England")
-    away = TeamRepository.resolve_or_create(session, source="football-data", alias="Chelsea", country="England")
+    home = TeamRepository.resolve_or_create(
+        session, source="football-data", alias="Arsenal", country="England"
+    )
+    away = TeamRepository.resolve_or_create(
+        session, source="football-data", alias="Chelsea", country="England"
+    )
     return season.id, home.id, away.id
 
 

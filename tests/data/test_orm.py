@@ -67,14 +67,14 @@ def test_match_round_trip(session: Session) -> None:
 
 def test_match_natural_key_unique(session: Session) -> None:
     season, home, away = _make_league_season_teams(session)
-    kwargs = dict(
-        season_id=season.id,
-        match_date=date(2023, 9, 2),
-        home_team_id=home.id,
-        away_team_id=away.id,
-        ft_home=1,
-        ft_away=1,
-    )
+    kwargs = {
+        "season_id": season.id,
+        "match_date": date(2023, 9, 2),
+        "home_team_id": home.id,
+        "away_team_id": away.id,
+        "ft_home": 1,
+        "ft_away": 1,
+    }
     session.add(Match(**kwargs))
     session.flush()
     session.add(Match(**kwargs))

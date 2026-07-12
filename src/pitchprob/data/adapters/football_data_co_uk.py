@@ -226,29 +226,27 @@ def parse_csv(content: bytes, *, start_year: int) -> ParseResult:
     records: list[MatchRecord] = []
     quarantined: list[QuarantinedRow] = []
 
+    def quarantine(row: dict[str, str | None], row_number: int, reason: str) -> None:
+        raw = ",".join(v or "" for k, v in row.items() if k is not None)
+        quarantined.append(QuarantinedRow(row_number=row_number, reason=reason, raw=raw[:200]))
+
     for row_number, row in enumerate(reader, start=1):
         if not any(_cell(row, c) for c in ("Div", "Date", "HomeTeam", "AwayTeam")):
             continue  # blank/padding row
 
-        def bail(reason: str) -> None:
-            raw = ",".join(v or "" for k, v in row.items() if k is not None)
-            quarantined.append(
-                QuarantinedRow(row_number=row_number, reason=reason, raw=raw[:200])
-            )
-
         match_date = _parse_date(_cell(row, "Date"))
         if match_date is None:
-            bail(f"unparseable Date: {_cell(row, 'Date')!r}")
+            quarantine(row, row_number, f"unparseable Date: {_cell(row, 'Date')!r}")
             continue
         home, away = _cell(row, "HomeTeam"), _cell(row, "AwayTeam")
         if not home or not away:
-            bail("missing HomeTeam/AwayTeam")
+            quarantine(row, row_number, "missing HomeTeam/AwayTeam")
             continue
         ft_home = _int_or_none(row, "FTHG")
         ft_away = _int_or_none(row, "FTAG")
         if ft_home is None or ft_away is None:
             missing = "FTHG" if ft_home is None else "FTAG"
-            bail(f"missing/invalid {missing}")
+            quarantine(row, row_number, f"missing/invalid {missing}")
             continue
 
         stats = {field: _int_or_none(row, col) for col, field in _STAT_COLUMNS.items()}

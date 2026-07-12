@@ -92,7 +92,12 @@ class TeamRepository:
 
     @staticmethod
     def resolve_or_create(
-        session: Session, *, source: str, alias: str, country: str, canonical_name: str | None = None
+        session: Session,
+        *,
+        source: str,
+        alias: str,
+        country: str,
+        canonical_name: str | None = None,
     ) -> Team:
         """Resolve an alias; on miss, attach it to a team of the same canonical
         name if one exists (cross-source join), otherwise create the team."""
