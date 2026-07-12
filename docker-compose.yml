@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: pitchprob-db
+    environment:
+      POSTGRES_USER: pitchprob
+      POSTGRES_PASSWORD: pitchprob
+      POSTGRES_DB: pitchprob
+    # 5433 on the host to avoid clashing with any pre-existing Postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pitchprob"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

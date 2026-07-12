@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environments & tooling caches
+.venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Project data & outputs (raw CSVs, reports, model artifacts)
+data/
+reports/
+artifacts/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local scratch scripts
+.setup-*.sh
+.run-*.sh
