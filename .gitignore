@@ -15,10 +15,11 @@ build/
 .coverage
 htmlcov/
 
-# Project data & outputs (raw CSVs, reports, model artifacts)
-data/
-reports/
-artifacts/
+# Project data & outputs (raw CSVs, reports, model artifacts) — root-level only,
+# NOT src/pitchprob/data or tests/data
+/data/
+/reports/
+/artifacts/
 
 # Editors / OS
 .idea/
