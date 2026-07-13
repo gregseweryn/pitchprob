@@ -112,6 +112,11 @@ class Match(Base):
     fouls_home: Mapped[int | None]
     fouls_away: Mapped[int | None]
 
+    # Expected goals, annotated post-hoc from Understat (M2); nullable because
+    # xG only exists from 2014 and only where the source matched the fixture.
+    xg_home: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    xg_away: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+
     season: Mapped[Season] = relationship()
     home_team: Mapped[Team] = relationship(foreign_keys=[home_team_id])
     away_team: Mapped[Team] = relationship(foreign_keys=[away_team_id])

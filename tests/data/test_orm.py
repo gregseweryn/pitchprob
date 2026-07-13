@@ -65,6 +65,39 @@ def test_match_round_trip(session: Session) -> None:
     assert loaded.kickoff_utc is None  # older seasons have no kickoff time
 
 
+def test_match_xg_columns_round_trip(session: Session) -> None:
+    from decimal import Decimal
+
+    season, home, away = _make_league_season_teams(session)
+    match = Match(
+        season_id=season.id,
+        match_date=date(2023, 9, 2),
+        home_team_id=home.id,
+        away_team_id=away.id,
+        ft_home=2,
+        ft_away=0,
+        xg_home=Decimal("1.87"),
+        xg_away=Decimal("0.44"),
+    )
+    session.add(match)
+    session.flush()
+    loaded = session.execute(select(Match)).scalar_one()
+    assert float(loaded.xg_home) == pytest.approx(1.87)
+    assert float(loaded.xg_away) == pytest.approx(0.44)
+
+
+def test_match_xg_defaults_to_none(session: Session) -> None:
+    season, home, away = _make_league_season_teams(session)
+    match = Match(
+        season_id=season.id, match_date=date(2023, 9, 2),
+        home_team_id=home.id, away_team_id=away.id, ft_home=1, ft_away=1,
+    )
+    session.add(match)
+    session.flush()
+    assert match.xg_home is None
+    assert match.xg_away is None
+
+
 def test_match_natural_key_unique(session: Session) -> None:
     season, home, away = _make_league_season_teams(session)
     kwargs = {

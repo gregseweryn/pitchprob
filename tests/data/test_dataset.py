@@ -42,6 +42,26 @@ class TestMatchesFrame:
         assert list(frame["date"]) == sorted(frame["date"])
 
 
+class TestMatchesFrameWithStats:
+    def test_stats_columns_present(self, seeded_session: Session) -> None:
+        frame = load_matches_frame(seeded_session, league_code="E0", include_stats=True)
+        expected_extra = {
+            "league", "shots_home", "shots_away",
+            "shots_on_target_home", "shots_on_target_away",
+            "corners_home", "corners_away", "xg_home", "xg_away",
+        }
+        assert expected_extra <= set(frame.columns)
+        assert set(frame["league"]) == {"E0"}
+        # fixture CSV carries shots; xG has not been ingested -> NaN floats
+        assert frame["shots_home"].notna().all()
+        assert frame["xg_home"].isna().all()
+
+    def test_default_excludes_stats(self, seeded_session: Session) -> None:
+        frame = load_matches_frame(seeded_session, league_code="E0")
+        assert "xg_home" not in frame.columns
+        assert list(frame.columns) == ["date", "home_team", "away_team", "ft_home", "ft_away"]
+
+
 class TestClosingOddsFrame:
     def test_pivoted_1x2_closing_prices(self, seeded_session: Session) -> None:
         frame = load_closing_odds_frame(

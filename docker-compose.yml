@@ -2,6 +2,7 @@ services:
   db:
     image: postgres:16-alpine
     container_name: pitchprob-db
+    restart: unless-stopped
     environment:
       POSTGRES_USER: pitchprob
       POSTGRES_PASSWORD: pitchprob

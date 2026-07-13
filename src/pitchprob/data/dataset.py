@@ -13,7 +13,20 @@ from sqlalchemy.orm import Session, aliased
 from pitchprob.data.orm import League, Match, OddsQuote, Season, Team
 
 MATCH_COLUMNS = ["date", "home_team", "away_team", "ft_home", "ft_away"]
+STATS_COLUMNS = [
+    "league",
+    "shots_home",
+    "shots_away",
+    "shots_on_target_home",
+    "shots_on_target_away",
+    "corners_home",
+    "corners_away",
+    "xg_home",
+    "xg_away",
+]
 ODDS_COLUMNS = ["date", "home_team", "away_team", "price_home", "price_draw", "price_away"]
+
+_NUMERIC_STATS = [c for c in STATS_COLUMNS if c != "league"]
 
 
 def load_matches_frame(
@@ -22,17 +35,36 @@ def load_matches_frame(
     league_code: str | None = None,
     start: date | None = None,
     end: date | None = None,
+    include_stats: bool = False,
 ) -> pd.DataFrame:
-    """Completed matches, one row each, sorted by date."""
+    """Completed matches, one row each, sorted by date.
+
+    With ``include_stats`` the frame additionally carries the league code and
+    the match statistics the feature builder consumes (shots, shots on target,
+    corners, xG) as floats with NaN for missing values.
+    """
     home, away = aliased(Team), aliased(Team)
+    columns = [
+        Match.match_date.label("date"),
+        home.canonical_name.label("home_team"),
+        away.canonical_name.label("away_team"),
+        Match.ft_home,
+        Match.ft_away,
+    ]
+    if include_stats:
+        columns += [
+            League.code.label("league"),
+            Match.shots_home,
+            Match.shots_away,
+            Match.shots_on_target_home,
+            Match.shots_on_target_away,
+            Match.corners_home,
+            Match.corners_away,
+            Match.xg_home,
+            Match.xg_away,
+        ]
     stmt = (
-        select(
-            Match.match_date.label("date"),
-            home.canonical_name.label("home_team"),
-            away.canonical_name.label("away_team"),
-            Match.ft_home,
-            Match.ft_away,
-        )
+        select(*columns)
         .join(home, Match.home_team_id == home.id)
         .join(away, Match.away_team_id == away.id)
         .join(Season, Match.season_id == Season.id)
@@ -46,7 +78,12 @@ def load_matches_frame(
     if end is not None:
         stmt = stmt.where(Match.match_date < end)
     rows = session.execute(stmt).all()
-    return pd.DataFrame(rows, columns=MATCH_COLUMNS)
+    frame_columns = MATCH_COLUMNS + (STATS_COLUMNS if include_stats else [])
+    frame = pd.DataFrame(rows, columns=frame_columns)
+    if include_stats:
+        for column in _NUMERIC_STATS:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame
 
 
 def load_closing_odds_frame(
