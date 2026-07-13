@@ -1,9 +1,11 @@
-"""Adapter for understat.com league-season pages.
+"""Adapter for understat.com league-season data.
 
-Each page embeds the season's matches as ``var datesData = JSON.parse('…')``
-where the JSON is a single-quoted JS string full of ``\\xNN`` escapes. One
-request per league-season yields per-match xG for both sides — 60 requests
-cover our entire corpus.
+Understat serves league data as JSON from ``GET /getLeagueData/{league}/
+{season}`` — the request must carry ``X-Requested-With: XMLHttpRequest`` or
+the endpoint 404s (verified 2026-07). The payload's ``dates`` list holds one
+entry per fixture with per-side xG. Older HTML pages embedded the identical
+entries as ``var datesData = JSON.parse('…')``; :func:`parse_league_payload`
+accepts both transports so cached legacy pages remain readable.
 
 Only played matches (``isResult: true``) are returned. Kickoff datetimes are
 reduced to dates; the xG service matches with ±1 day tolerance because the
@@ -15,9 +17,13 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 SOURCE = "understat"
-BASE_URL = "https://understat.com/league"
+BASE_URL = "https://understat.com/getLeagueData"
+
+#: Headers without which the endpoint returns 404.
+REQUIRED_HEADERS: dict[str, str] = {"X-Requested-With": "XMLHttpRequest"}
 
 #: football-data division code -> Understat league slug
 LEAGUE_SLUGS: dict[str, str] = {
@@ -58,15 +64,29 @@ def _decode_js_string(raw: str) -> str:
         return decoded
 
 
-def parse_league_page(content: bytes) -> tuple[UnderstatMatch, ...]:
-    html = content.decode("utf-8", errors="replace")
-    found = _DATES_DATA_RE.search(html)
-    if found is None:
-        raise ValueError("no datesData block found — Understat page layout changed?")
-    entries = json.loads(_decode_js_string(found.group(1)))
+def _extract_entries(content: bytes) -> list[dict[str, Any]]:
+    text = content.decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("dates"), list):
+        return list(payload["dates"])
+    if isinstance(payload, list):  # bare entries array
+        return list(payload)
 
+    found = _DATES_DATA_RE.search(text)  # legacy HTML embedding
+    if found is None:
+        raise ValueError(
+            "neither a getLeagueData JSON payload nor a datesData block found — "
+            "Understat layout changed?"
+        )
+    return list(json.loads(_decode_js_string(found.group(1))))
+
+
+def parse_league_payload(content: bytes) -> tuple[UnderstatMatch, ...]:
     records: list[UnderstatMatch] = []
-    for entry in entries:
+    for entry in _extract_entries(content):
         if not entry.get("isResult"):
             continue
         kickoff = datetime.strptime(entry["datetime"], "%Y-%m-%d %H:%M:%S")

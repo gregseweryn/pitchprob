@@ -24,6 +24,7 @@ type:
 check: lint type test
 
 db-up:
+	@bash scripts/docker-preflight.sh || true
 	docker compose up -d db
 
 db-down:

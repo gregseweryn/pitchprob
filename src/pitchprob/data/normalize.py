@@ -84,6 +84,9 @@ _UNDERSTAT_OVERRIDES: dict[str, str] = {
     # Spain
     "Athletic Club": "Athletic Bilbao",
     "SD Huesca": "Huesca",
+    "Sporting Gijon": "Sp Gijon",
+    "Real Valladolid": "Valladolid",
+    "Real Oviedo": "Oviedo",
     # Germany
     "Arminia Bielefeld": "Bielefeld",
     "Borussia M.Gladbach": "Borussia Monchengladbach",
@@ -101,6 +104,8 @@ _UNDERSTAT_OVERRIDES: dict[str, str] = {
     "SPAL 2013": "SPAL",
     # France
     "Paris Saint Germain": "Paris Saint-Germain",
+    "SC Bastia": "Bastia",
+    "GFC Ajaccio": "Ajaccio GFCO",  # Gazélec — distinct from AC "Ajaccio"
 }
 
 

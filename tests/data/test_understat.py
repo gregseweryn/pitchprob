@@ -1,7 +1,9 @@
 """Understat adapter and xG-update service tests (fully offline).
 
-The page fixture reproduces Understat's real embedding: a ``datesData``
-variable whose JSON is a single-quoted JS string full of ``\\xNN`` escapes.
+Since late 2026 Understat serves league data from a JSON endpoint
+(``GET /getLeagueData/{league}/{season}``, X-Requested-With required); the
+old HTML pages embedded the same entries as a ``datesData = JSON.parse('…')``
+blob. The adapter handles both; fixtures below reproduce each transport.
 """
 
 from datetime import date
@@ -11,7 +13,11 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from pitchprob.data.adapters.understat import league_url, parse_league_page
+from pitchprob.data.adapters.understat import (
+    REQUIRED_HEADERS,
+    league_url,
+    parse_league_payload,
+)
 from pitchprob.data.orm import Base, Match
 from pitchprob.data.service import IngestionService
 from pitchprob.data.xg_service import XgUpdateService, resolve_understat_team
@@ -21,12 +27,12 @@ from .test_normalize_and_service import ARSENAL_FOREST, FakeDownloader, _modern_
 
 
 def _encode_understat(payload: str) -> str:
-    """Mimic Understat's escaping: quotes/brackets/braces become \\xNN."""
+    """Mimic the legacy pages' escaping: quotes/brackets/braces as \\xNN."""
     table = {'"': "\\x22", "[": "\\x5B", "]": "\\x5D", "{": "\\x7B", "}": "\\x7D"}
     return "".join(table.get(ch, ch) for ch in payload)
 
 
-UNDERSTAT_JSON = (
+UNDERSTAT_ENTRIES = (
     '[{"id":"21001","isResult":true,'
     '"h":{"id":"89","title":"Burnley","short_title":"BUR"},'
     '"a":{"id":"88","title":"Manchester City","short_title":"MCI"},'
@@ -44,24 +50,36 @@ UNDERSTAT_JSON = (
     '"datetime":"2023-08-13 16:30:00"}]'
 )
 
-PAGE = (
-    "<html><body><script>\n"
-    f"var datesData = JSON.parse('{_encode_understat(UNDERSTAT_JSON)}');\n"
-    "</script></body></html>"
-).encode()
+
+def _api_payload(entries: str = UNDERSTAT_ENTRIES) -> bytes:
+    return ('{"teams": [], "players": [], "dates": ' + entries + "}").encode()
 
 
-class TestParseLeaguePage:
+def _legacy_page(entries: str = UNDERSTAT_ENTRIES) -> bytes:
+    return (
+        "<html><body><script>\n"
+        f"var datesData = JSON.parse('{_encode_understat(entries)}');\n"
+        "</script></body></html>"
+    ).encode()
+
+
+API_URL = "https://understat.com/getLeagueData/EPL/2023"
+
+
+class TestParseLeaguePayload:
     def test_url(self) -> None:
-        assert league_url("E0", 2023) == "https://understat.com/league/EPL/2023"
-        assert league_url("SP1", 2019) == "https://understat.com/league/La_liga/2019"
+        assert league_url("E0", 2023) == "https://understat.com/getLeagueData/EPL/2023"
+        assert league_url("SP1", 2019) == "https://understat.com/getLeagueData/La_liga/2019"
+
+    def test_required_headers(self) -> None:
+        assert REQUIRED_HEADERS["X-Requested-With"] == "XMLHttpRequest"
 
     def test_parses_results_only(self) -> None:
-        records = parse_league_page(PAGE)
+        records = parse_league_payload(_api_payload())
         assert len(records) == 2  # the unplayed fixture is excluded
 
     def test_fields(self) -> None:
-        rec = parse_league_page(PAGE)[0]
+        rec = parse_league_payload(_api_payload())[0]
         assert rec.home_team == "Burnley"
         assert rec.away_team == "Manchester City"
         assert rec.match_date == date(2023, 8, 12)
@@ -69,9 +87,14 @@ class TestParseLeaguePage:
         assert rec.xg_away == Decimal("2.84")
         assert (rec.home_goals, rec.away_goals) == (0, 3)
 
-    def test_missing_datesdata_raises(self) -> None:
+    def test_legacy_embedded_page_still_parses(self) -> None:
+        records = parse_league_payload(_legacy_page())
+        assert len(records) == 2
+        assert records[0].xg_away == Decimal("2.84")
+
+    def test_garbage_raises(self) -> None:
         with pytest.raises(ValueError):
-            parse_league_page(b"<html>nope</html>")
+            parse_league_payload(b"<html>nope</html>")
 
 
 @pytest.fixture()
@@ -134,9 +157,7 @@ class TestTeamResolution:
 
 class TestXgUpdateService:
     def test_updates_matching_fixtures(self, seeded_session: Session) -> None:
-        downloader = FakeDownloader(
-            {"https://understat.com/league/EPL/2023": PAGE}
-        )
+        downloader = FakeDownloader({API_URL: _api_payload()})
         service = XgUpdateService(session=seeded_session, downloader=downloader)
         report = service.update_league_season("E0", 2023)
 
@@ -152,22 +173,17 @@ class TestXgUpdateService:
         assert float(burnley.xg_away) == pytest.approx(2.84)
 
     def test_idempotent(self, seeded_session: Session) -> None:
-        downloader = FakeDownloader({"https://understat.com/league/EPL/2023": PAGE})
+        downloader = FakeDownloader({API_URL: _api_payload()})
         service = XgUpdateService(session=seeded_session, downloader=downloader)
         service.update_league_season("E0", 2023)
         report2 = service.update_league_season("E0", 2023)
         assert report2.matched == 2
 
     def test_unknown_team_is_reported_not_crashed(self, seeded_session: Session) -> None:
-        bogus_json = UNDERSTAT_JSON.replace("Burnley", "Atlantis United")
-        page = (
-            "<script>var datesData = JSON.parse('"
-            + _encode_understat(bogus_json)
-            + "');</script>"
-        ).encode()
+        bogus = UNDERSTAT_ENTRIES.replace("Burnley", "Atlantis United")
         service = XgUpdateService(
             session=seeded_session,
-            downloader=FakeDownloader({"https://understat.com/league/EPL/2023": page}),
+            downloader=FakeDownloader({API_URL: _api_payload(bogus)}),
         )
         report = service.update_league_season("E0", 2023)
         assert report.matched == 1
@@ -175,15 +191,10 @@ class TestXgUpdateService:
 
     def test_date_tolerance_one_day(self, seeded_session: Session) -> None:
         """Understat datetimes can land on the neighbouring day (timezones)."""
-        shifted = UNDERSTAT_JSON.replace("2023-08-12 19:30:00", "2023-08-13 00:30:00")
-        page = (
-            "<script>var datesData = JSON.parse('"
-            + _encode_understat(shifted)
-            + "');</script>"
-        ).encode()
+        shifted = UNDERSTAT_ENTRIES.replace("2023-08-12 19:30:00", "2023-08-13 00:30:00")
         service = XgUpdateService(
             session=seeded_session,
-            downloader=FakeDownloader({"https://understat.com/league/EPL/2023": page}),
+            downloader=FakeDownloader({API_URL: _api_payload(shifted)}),
         )
         report = service.update_league_season("E0", 2023)
         assert report.matched == 2

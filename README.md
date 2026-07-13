@@ -11,7 +11,7 @@ benchmarked against the closing line.
 > plainly when the models fall short of it. They usually do; that is the expected result
 > and the reports are designed to show it rather than hide it.
 
-## What works today (Milestone 1: probability core)
+## What works today (M1 probability core + M2 ML layer)
 
 - **Data**: 21,589 matches across the top-5 European leagues (EPL, La Liga, Bundesliga,
   Serie A, Ligue 1), seasons 2014/15–2025/26, ingested from football-data.co.uk with
@@ -20,6 +20,13 @@ benchmarked against the closing line.
   reasons).
 - **Models**: Dixon-Coles (time-decay weighted MLE with analytic gradients), independent
   Poisson (the baseline DC must beat), and Elo with an ordered-logit 1X2 mapping.
+- **M2 ML layer**: per-match xG from Understat (99.98% coverage via the
+  ``getLeagueData`` JSON API), a leakage-free streaming feature builder (rolling
+  goals/xG/shots/corners form, venue splits, rest days), an XGBoost 1X2 model with
+  temporal-holdout early stopping, temperature/isotonic calibration, and a stacking
+  ensemble (log-linear pool + per-class bias, ridge-fit on a temporal holdout). The
+  prediction service serves the ensemble headline with component probabilities and
+  stack weights alongside, cached per (league, data version).
 - **Markets**: every goals market is derived from one score probability matrix
   (ADR 0002) — 1X2, Double Chance, Draw No Bet, totals at any line, BTTS, Correct
   Score, and Asian Handicap with full quarter-line split-stake settlement semantics.
@@ -94,6 +101,31 @@ crossing it.
 Reproduce with: `uv run pitchprob backtest --league E0 --start 2021-08-01`
 (results are stored in the `backtests` table).
 
+### M2 results: does the ML layer help? (same protocol, 28-day refits)
+
+| E0 2021–26, closing-odds subset (n=1730) | log-loss | RPS | ECE (home) |
+|---|---|---|---|
+| Dixon-Coles | 0.9725 | 0.2002 | 0.021 |
+| GBM (xG/form features) | 0.9796 | 0.2010 | 0.020 |
+| **Ensemble (DC+Elo+GBM stack)** | 0.9756 | 0.2004 | **0.014** |
+| Pinnacle closing (Shin de-margined) | 0.9464 | 0.1917 | — |
+
+Honest read: on log-loss/RPS the ensemble lands *between* its components — with
+components this close and correlated, a few hundred holdout matches cannot estimate
+stack weights precisely enough to guarantee beating the best component (the test
+suite documents this as irreducible dilution, not a bug). What the ensemble *does*
+deliver is *calibration*: ECE drops ~30% versus any single model, which is the
+property an EV engine actually depends on. On the full E0 history the stack weights
+are DC 0.29 / Elo 0.04 / GBM 0.41 — the GBM earns the largest weight through error
+diversity despite losing to DC solo.
+
+**A trap found and reported, not hidden:** the ensemble's flat-staking simulation
+(EV > 3% vs best market price) lost **−11.2% ROI over 2,192 bets despite +0.5% mean
+CLV** — its bias-corrected draw/away probabilities push more marginal longshots over
+the EV threshold, exactly where the favourite-longshot bias makes market prices most
+punishing (hit rate 25.9% vs DC's 28.0%). Naive EV thresholds over-select longshots;
+vig-aware bet selection is the designated M3 betting-engine problem.
+
 ## Architecture
 
 Modular monolith (ADR 0001), Python 3.12, src layout, DDD-flavored bounded contexts:
@@ -134,9 +166,9 @@ make test-int    # Postgres integration tests (needs make db-up)
 
 | Milestone | Scope |
 |---|---|
-| **M1 (this)** | Probability core: data, DC/Poisson/Elo, markets, EV, honest backtests, CLI + API |
-| M2 | Feature store, xG (Understat), gradient boosting, ensemble + calibration layer, fitted-model cache |
-| M3 | Full betting engine: coupon generator with risk tiers, corners/cards models (data already ingested) |
+| **M1 ✓** | Probability core: data, DC/Poisson/Elo, markets, EV, honest backtests, CLI + API |
+| **M2 ✓** | xG (Understat), feature builder, XGBoost, calibration, stacking ensemble, model cache |
+| M3 | Full betting engine: vig-aware bet selection, coupon generator with risk tiers, corners/cards models (data already ingested) |
 | M4 | Next.js dashboard |
 | M5 | Live-info engine (API-Football) + LLM news intelligence |
 | M6 | Deployment hardening (Docker images, CI/CD) |

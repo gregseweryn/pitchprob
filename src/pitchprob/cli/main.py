@@ -91,11 +91,14 @@ def xg(
     to_year: Annotated[int, typer.Option(help="Last season start year")] = 2025,
 ) -> None:
     """Attach Understat xG to already-ingested matches (idempotent)."""
+    from pitchprob.data.adapters.understat import REQUIRED_HEADERS
     from pitchprob.data.xg_service import XgUpdateService
 
     configure_logging(get_settings().log_level)
     codes = list(LEAGUES) if all_leagues or not league else league
-    downloader = _make_downloader()
+    downloader = HttpDownloader(
+        cache_dir=get_settings().data_dir / "raw", headers=REQUIRED_HEADERS
+    )
     with session_scope() as session:
         service = XgUpdateService(session=session, downloader=downloader)
         for code in codes:
@@ -194,11 +197,13 @@ def predict(
     typer.echo(f"expected goals: {eg['home']:.2f} - {eg['away']:.2f}\n")
 
     typer.echo("1X2                home   draw   away")
-    for model_name in ("dixon_coles", "elo"):
+    for model_name in ("ensemble", "dixon_coles", "elo", "gbm"):
         p = markets["1x2"][model_name]
         typer.echo(
             f"  {model_name:<16} {_pct(p['home'])} {_pct(p['draw'])} {_pct(p['away'])}"
         )
+    weights = ", ".join(f"{k}={v:.2f}" for k, v in book["ensemble_weights"].items())
+    typer.echo(f"  stack weights: {weights}")
 
     dc_ = markets["double_chance"]
     typer.echo(f"\nDouble chance      1X {_pct(dc_['home_or_draw'])}   "

@@ -19,7 +19,7 @@ from pitchprob.data.adapters.understat import (
     SOURCE,
     UnderstatMatch,
     league_url,
-    parse_league_page,
+    parse_league_payload,
 )
 from pitchprob.data.normalize import normalized_tokens, understat_canonical
 from pitchprob.data.orm import League, Match, Season, Team, TeamAlias
@@ -87,7 +87,9 @@ class XgUpdateService:
 
     def update_league_season(self, league_code: str, start_year: int) -> XgUpdateReport:
         report = XgUpdateReport(league_code=league_code, start_year=start_year)
-        records = parse_league_page(self.downloader.get(league_url(league_code, start_year)))
+        records = parse_league_payload(
+            self.downloader.get(league_url(league_code, start_year))
+        )
         report.parsed = len(records)
         index = self._match_index(league_code, start_year)
 

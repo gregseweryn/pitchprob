@@ -47,11 +47,17 @@ class HttpDownloader:
     """
 
     def __init__(
-        self, cache_dir: Path | None = None, *, refresh: bool = False, timeout: float = 30.0
+        self,
+        cache_dir: Path | None = None,
+        *,
+        refresh: bool = False,
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.cache_dir = cache_dir
         self.refresh = refresh
         self.timeout = timeout
+        self.headers = headers
 
     def get(self, url: str) -> bytes:
         cache_path: Path | None = None
@@ -59,7 +65,9 @@ class HttpDownloader:
             cache_path = self.cache_dir / url.removeprefix("https://").replace("/", "_")
             if cache_path.exists() and not self.refresh:
                 return cache_path.read_bytes()
-        response = httpx.get(url, timeout=self.timeout, follow_redirects=True)
+        response = httpx.get(
+            url, timeout=self.timeout, follow_redirects=True, headers=self.headers
+        )
         response.raise_for_status()
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
