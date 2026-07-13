@@ -27,6 +27,15 @@ def get_session_factory() -> sessionmaker[Session]:
     return _session_factory
 
 
+def reset() -> None:
+    """Dispose the cached engine/session factory (tests repoint the URL)."""
+    global _engine, _session_factory
+    if _engine is not None:
+        _engine.dispose()
+    _engine = None
+    _session_factory = None
+
+
 @contextmanager
 def session_scope() -> Iterator[Session]:
     """Transactional scope: commit on success, roll back on error."""

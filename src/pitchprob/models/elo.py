@@ -17,7 +17,7 @@ signal next to the goal models.
 
 import math
 from dataclasses import dataclass
-from typing import Self
+from typing import Self, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -141,3 +141,43 @@ class EloModel:
             raise ModelNotFittedError("call fit() before predicting")
         diff = self.rating(home_team) + self.home_advantage - self.rating(away_team)
         return self._logit.probabilities(diff)
+
+    # -------------------------------------------------------- persistence
+
+    def get_params(self) -> dict[str, object]:
+        """JSON-safe fitted state (persisted in ``model_runs.params``)."""
+        if self._logit is None:
+            raise ModelNotFittedError("call fit() before serializing")
+        return {
+            "model": "elo",
+            "config": {
+                "k": self.k,
+                "home_advantage": self.home_advantage,
+                "initial_rating": self.initial_rating,
+            },
+            "ratings": dict(self.ratings),
+            "ordered_logit": {
+                "scale": self._logit.scale,
+                "cut_low": self._logit.cut_low,
+                "cut_high": self._logit.cut_high,
+            },
+        }
+
+    @classmethod
+    def from_params(cls, payload: dict[str, object]) -> "EloModel":
+        cfg = cast(dict[str, float], payload["config"])
+        model = cls(
+            k=cfg["k"],
+            home_advantage=cfg["home_advantage"],
+            initial_rating=cfg["initial_rating"],
+        )
+        model.ratings = {
+            str(k): float(v) for k, v in cast(dict[str, float], payload["ratings"]).items()
+        }
+        logit = cast(dict[str, float], payload["ordered_logit"])
+        model._logit = _OrderedLogit(
+            scale=float(logit["scale"]),
+            cut_low=float(logit["cut_low"]),
+            cut_high=float(logit["cut_high"]),
+        )
+        return model

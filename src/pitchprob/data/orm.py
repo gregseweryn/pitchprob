@@ -89,10 +89,10 @@ class Match(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id"))
-    match_date: Mapped[date] = mapped_column(Date)
+    match_date: Mapped[date] = mapped_column(Date, index=True)
     kickoff_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    home_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
-    away_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
+    home_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), index=True)
+    away_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), index=True)
 
     ft_home: Mapped[int]
     ft_away: Mapped[int]
@@ -128,7 +128,7 @@ class OddsQuote(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"))
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
     bookmaker: Mapped[str] = mapped_column(String(32))  # pinnacle, bet365, market_max, market_avg
     market: Mapped[str] = mapped_column(String(16))  # 1x2, ou, ah
     line: Mapped[Decimal] = mapped_column(Numeric(4, 2), default=Decimal(0))

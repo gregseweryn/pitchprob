@@ -5,7 +5,8 @@ import pytest
 from pitchprob.core.config import Settings
 
 
-def test_defaults() -> None:
+def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PITCHPROB_DATABASE_URL", raising=False)
     s = Settings(_env_file=None)
     assert s.database_url.startswith("postgresql+psycopg://")
     assert s.log_level == "INFO"

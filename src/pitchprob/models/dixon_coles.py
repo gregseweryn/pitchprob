@@ -233,6 +233,51 @@ class DixonColesModel:
         return matrix
 
 
+    # -------------------------------------------------------- persistence
+
+    def get_params(self) -> dict[str, Any]:
+        """JSON-safe fitted state (persisted in ``model_runs.params``)."""
+        p = self.params
+        return {
+            "model": "dixon_coles",
+            "config": {
+                "half_life_days": self.half_life_days,
+                "l2": self.l2,
+                "max_goals": self.max_goals,
+                "fixed_rho": self.fixed_rho,
+            },
+            "mu": p.mu,
+            "home_adv": p.home_adv,
+            "rho": p.rho,
+            "attack": dict(p.attack),
+            "defence": dict(p.defence),
+        }
+
+    @classmethod
+    def from_params(cls, payload: dict[str, Any]) -> "DixonColesModel":
+        """Rebuild a fitted model from :meth:`get_params` output.
+
+        Always returns a ``DixonColesModel`` (an ``IndependentPoissonModel``
+        round-trips as its rho-fixed equivalent).
+        """
+        cfg = payload["config"]
+        model = DixonColesModel(
+            half_life_days=cfg["half_life_days"],
+            l2=cfg["l2"],
+            max_goals=cfg["max_goals"],
+            fixed_rho=cfg.get("fixed_rho"),
+        )
+        model._params = DixonColesParams(
+            mu=float(payload["mu"]),
+            home_adv=float(payload["home_adv"]),
+            rho=float(payload["rho"]),
+            attack={str(k): float(v) for k, v in payload["attack"].items()},
+            defence={str(k): float(v) for k, v in payload["defence"].items()},
+        )
+        model._teams = sorted(model._params.attack)
+        return model
+
+
 class IndependentPoissonModel(DixonColesModel):
     """Dixon-Coles with the dependence correction disabled (rho = 0)."""
 
