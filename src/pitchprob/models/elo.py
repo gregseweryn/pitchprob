@@ -33,6 +33,29 @@ FloatArray = npt.NDArray[np.float64]
 _AWAY, _DRAW, _HOME = 0, 1, 2
 
 
+def elo_update(
+    rating_home: float,
+    rating_away: float,
+    *,
+    home_goals: int,
+    away_goals: int,
+    k: float = 20.0,
+    home_advantage: float = 60.0,
+) -> tuple[float, float]:
+    """One sequential Elo update; shared by the model and the feature builder."""
+    diff = rating_home + home_advantage - rating_away
+    expected = 1.0 / (1.0 + 10.0 ** (-diff / 400.0))
+    if home_goals > away_goals:
+        score = 1.0
+    elif home_goals < away_goals:
+        score = 0.0
+    else:
+        score = 0.5
+    mov = 1.0 + math.log1p(max(abs(home_goals - away_goals) - 1, 0))
+    delta = k * mov * (score - expected)
+    return rating_home + delta, rating_away - delta
+
+
 def _sigmoid(x: FloatArray) -> FloatArray:
     return 1.0 / (1.0 + np.exp(-x))
 
@@ -91,17 +114,17 @@ class EloModel:
         observations: list[tuple[float, int]] = []
         for home, away, hg, ag in zip(homes, aways, home_goals, away_goals, strict=True):
             diff = self.rating(home) + self.home_advantage - self.rating(away)
-            expected = 1.0 / (1.0 + 10.0 ** (-diff / 400.0))
             if hg > ag:
-                score, outcome = 1.0, _HOME
+                outcome = _HOME
             elif hg < ag:
-                score, outcome = 0.0, _AWAY
+                outcome = _AWAY
             else:
-                score, outcome = 0.5, _DRAW
-            mov = 1.0 + math.log1p(max(int(abs(hg - ag)) - 1, 0))
-            delta = self.k * mov * (score - expected)
-            self.ratings[home] = self.rating(home) + delta
-            self.ratings[away] = self.rating(away) - delta
+                outcome = _DRAW
+            self.ratings[home], self.ratings[away] = elo_update(
+                self.rating(home), self.rating(away),
+                home_goals=int(hg), away_goals=int(ag),
+                k=self.k, home_advantage=self.home_advantage,
+            )
             observations.append((diff, outcome))
         return observations
 
