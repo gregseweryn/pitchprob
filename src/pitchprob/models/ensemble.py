@@ -166,6 +166,15 @@ class EnsembleModel:
             for name, w in zip(self.component_factories, self._stack.weights, strict=True)
         }
 
+    @property
+    def components_(self) -> dict[str, Any]:
+        """Fitted stage-two components (trained on the full window). Consumers
+        use these for component-level views, e.g. the Dixon-Coles score matrix
+        that prices goals markets."""
+        if self._components is None:
+            raise ModelNotFittedError("call fit() before inspecting")
+        return self._components
+
     def match_probabilities_at(
         self, home_team: str, away_team: str, as_of: date
     ) -> OutcomeProbabilities:

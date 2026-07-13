@@ -5,6 +5,7 @@ models and backtests consume. Team names are canonical.
 """
 
 from datetime import date
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import select
@@ -44,7 +45,7 @@ def load_matches_frame(
     corners, xG) as floats with NaN for missing values.
     """
     home, away = aliased(Team), aliased(Team)
-    columns = [
+    columns: list[Any] = [
         Match.match_date.label("date"),
         home.canonical_name.label("home_team"),
         away.canonical_name.label("away_team"),

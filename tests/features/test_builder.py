@@ -46,7 +46,7 @@ class TestShape:
         assert {"date", "league", "home_team", "away_team"} <= set(X.columns)
 
     def test_outcome_encoding(self, built) -> None:
-        X, y = built
+        _, y = built
         # results: A win (home), draw, away win (C), draw
         assert list(y) == [0, 1, 2, 1]
 

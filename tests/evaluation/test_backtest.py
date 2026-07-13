@@ -120,3 +120,76 @@ class TestBacktestMechanics:
         must produce no predictions."""
         result = self._run(start=date(2023, 8, 1), min_train_matches=20)
         assert pd.to_datetime(result["date"]).min().date() >= date(2023, 8, 21)
+
+
+class TestPooledTrainingSingleLeagueEval:
+    @staticmethod
+    def _two_league_frame() -> pd.DataFrame:
+        frame_x = league_frame()
+        frame_x["league"] = "X"
+        frame_y = league_frame()
+        frame_y["league"] = "Y"
+        frame_y["home_team"] = frame_y["home_team"] + "_y"
+        frame_y["away_team"] = frame_y["away_team"] + "_y"
+        return pd.concat([frame_x, frame_y], ignore_index=True)
+
+    def _run(self, **kwargs) -> pd.DataFrame:
+        from pitchprob.models.base import OutcomeProbabilities as OP
+
+        class Dummy:
+            def fit(self, df: pd.DataFrame) -> "Dummy":
+                self.n_train = len(df)
+                return self
+
+        instances: list[Dummy] = []
+
+        def factory() -> Dummy:
+            m = Dummy()
+            instances.append(m)
+            return m
+
+        result = run_backtest(
+            self._two_league_frame(),
+            model_factory=factory,
+            predict=lambda m, row: OP(1 / 3, 1 / 3, 1 / 3),
+            start=date(2023, 9, 1),
+            refit_every_days=14,
+            min_train_matches=10,
+            **kwargs,
+        )
+        self.instances = instances
+        return result
+
+    def test_league_column_passes_through(self) -> None:
+        result = self._run()
+        assert "league" in result.columns
+        assert set(result["league"]) == {"X", "Y"}
+
+    def test_predict_only_filters_evaluation_not_training(self) -> None:
+        result = self._run(predict_only={"league": "X"})
+        assert set(result["league"]) == {"X"}
+        # training still saw both leagues: with one match per league per day,
+        # any window's training set must exceed the single-league count
+        first_window_train = self.instances[0].n_train
+        assert first_window_train > 35  # 31 days x 2 leagues before Sept 1
+
+
+class TestDateAwarePredictHook:
+    def test_default_predict_prefers_dated_probabilities(self) -> None:
+        from pitchprob.evaluation.backtest import default_predict
+        from pitchprob.models.base import OutcomeProbabilities as OP
+
+        class Dated:
+            def match_probabilities(self, home: str, away: str) -> OP:
+                raise AssertionError("dated variant must win")
+
+            def match_probabilities_at(self, home: str, away: str, as_of: date) -> OP:
+                assert as_of == date(2023, 9, 1)
+                return OP(0.5, 0.3, 0.2)
+
+        class Row:
+            home_team, away_team = "A", "B"
+            date = date(2023, 9, 1)
+
+        p = default_predict(Dated(), Row())
+        assert p.home == 0.5

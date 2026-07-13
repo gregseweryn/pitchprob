@@ -48,7 +48,7 @@ PAGE = (
     "<html><body><script>\n"
     f"var datesData = JSON.parse('{_encode_understat(UNDERSTAT_JSON)}');\n"
     "</script></body></html>"
-).encode("utf-8")
+).encode()
 
 
 class TestParseLeaguePage:

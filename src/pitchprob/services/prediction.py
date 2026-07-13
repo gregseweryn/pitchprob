@@ -1,10 +1,14 @@
 """Market-book construction: one fixture → every market probability.
 
-This is the application service shared by the CLI and the API. It trains
-Dixon-Coles and Elo on the league's full history at request time (a few
-seconds — acceptable for M1; a fitted-model cache keyed by league and data
-version is the designated M2 optimization) and derives all goal markets from
-the score matrix per ADR 0002.
+This is the application service shared by the CLI and the API. Since M2 the
+headline 1X2 probabilities come from the stacking **ensemble** (Dixon-Coles +
+Elo + GBM, ADR 0005); component probabilities are reported alongside for
+transparency, and goals markets still derive from the Dixon-Coles score
+matrix per ADR 0002 (the ensemble is outcome-space).
+
+Fitted ensembles are cached per ``(league, half-life, data version)`` where
+the data version changes whenever matches are ingested — the M1 fit-per-call
+cost is gone and a stale model can never serve after new data lands.
 
 Asian handicap entries report, per line, the probability that a bet on each
 side wins (fully or half) plus the push probability.
@@ -14,11 +18,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pitchprob.betting.staking import expected_value, kelly_fraction
 from pitchprob.core.errors import UnknownTeamError
 from pitchprob.data.dataset import load_matches_frame
+from pitchprob.data.orm import League, Match, Season
 from pitchprob.markets import (
     asian_handicap,
     btts,
@@ -28,8 +34,8 @@ from pitchprob.markets import (
     match_odds,
     totals,
 )
-from pitchprob.models.dixon_coles import DixonColesModel
-from pitchprob.models.elo import EloModel
+from pitchprob.models.base import OutcomeProbabilities
+from pitchprob.models.ensemble import EnsembleModel
 
 DISCLAIMER = (
     "Probabilities are model estimates with uncertainty; they are routinely "
@@ -44,6 +50,51 @@ _TOP_SCORES = 5
 #: in the club-football literature (recent form matters, but one season of
 #: signal should not evaporate).
 DEFAULT_HALF_LIFE_DAYS = 390.0
+
+#: Fitted ensembles keyed by (league, half_life, n_matches, max_match_id).
+_ENSEMBLE_CACHE: dict[tuple[str, float | None, int, int], EnsembleModel] = {}
+
+
+def _data_version(session: Session, league_code: str) -> tuple[int, int]:
+    """(match count, max match id) — changes iff the league's data changes."""
+    row = session.execute(
+        select(func.count(Match.id), func.coalesce(func.max(Match.id), 0))
+        .join(Season, Match.season_id == Season.id)
+        .join(League, Season.league_id == League.id)
+        .where(League.code == league_code)
+    ).one()
+    return int(row[0]), int(row[1])
+
+
+def _cached_ensemble(
+    session: Session, league_code: str, half_life_days: float | None
+) -> EnsembleModel:
+    version = _data_version(session, league_code)
+    key = (league_code, half_life_days, *version)
+    cached = _ENSEMBLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    frame = load_matches_frame(session, league_code=league_code, include_stats=True)
+    if frame.empty:
+        raise ValueError(f"no ingested matches for league {league_code!r}")
+    # Scale the stacking holdout to the available history so small leagues
+    # (and test fixtures) still fit; 380 ≈ one EPL season is the ceiling.
+    holdout = min(380, max(10, len(frame) // 5))
+    min_train = max(1, min(200, len(frame) - holdout))
+    model = EnsembleModel(
+        half_life_days=half_life_days, holdout=holdout, min_train=min_train
+    ).fit(frame)
+
+    # Retain only the newest version per league to bound memory.
+    for stale in [k for k in _ENSEMBLE_CACHE if k[0] == league_code]:
+        del _ENSEMBLE_CACHE[stale]
+    _ENSEMBLE_CACHE[key] = model
+    return model
+
+
+def _probs_dict(p: OutcomeProbabilities) -> dict[str, float]:
+    return {"home": p.home, "draw": p.draw, "away": p.away}
 
 
 def build_market_book(
@@ -66,8 +117,9 @@ def build_market_book(
                 "use the canonical team name"
             )
 
-    dc = DixonColesModel(half_life_days=half_life_days).fit(frame)
-    elo = EloModel().fit(frame)
+    ensemble = _cached_ensemble(session, league_code, half_life_days)
+    components = ensemble.components_
+    dc = components["dixon_coles"]
 
     matrix = dc.score_matrix(home_team, away_team)
     mo = match_odds(matrix)
@@ -75,7 +127,16 @@ def build_market_book(
     dnb = draw_no_bet(matrix)
     both = btts(matrix)
     goals = expected_goals(matrix)
-    elo_p = elo.match_probabilities(home_team, away_team)
+
+    ensemble_p = ensemble.match_probabilities(home_team, away_team)
+    one_x_two: dict[str, dict[str, float]] = {
+        "ensemble": _probs_dict(ensemble_p),
+        "dixon_coles": _probs_dict(
+            OutcomeProbabilities(home=mo.home, draw=mo.draw, away=mo.away)
+        ),
+        "elo": _probs_dict(components["elo"].match_probabilities(home_team, away_team)),
+        "gbm": _probs_dict(components["gbm"].match_probabilities(home_team, away_team)),
+    }
 
     top_scores = sorted(
         (
@@ -105,12 +166,10 @@ def build_market_book(
         "generated_at": datetime.now(tz=UTC).isoformat(),
         "trained_on_matches": len(frame),
         "train_max_date": str(frame["date"].max()),
+        "ensemble_weights": ensemble.weights_,
         "expected_goals": {"home": goals.home, "away": goals.away},
         "markets": {
-            "1x2": {
-                "dixon_coles": {"home": mo.home, "draw": mo.draw, "away": mo.away},
-                "elo": {"home": elo_p.home, "draw": elo_p.draw, "away": elo_p.away},
-            },
+            "1x2": one_x_two,
             "double_chance": {
                 "home_or_draw": dc_book.home_or_draw,
                 "home_or_away": dc_book.home_or_away,
@@ -134,7 +193,7 @@ def build_market_book(
     }
 
     if offered_1x2 is not None:
-        probabilities = {"home": mo.home, "draw": mo.draw, "away": mo.away}
+        probabilities = one_x_two["ensemble"]
         prices = dict(zip(("home", "draw", "away"), offered_1x2, strict=True))
         book["value_analysis"] = {
             selection: {

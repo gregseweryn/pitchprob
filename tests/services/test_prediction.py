@@ -70,12 +70,9 @@ class TestMarketBook:
         assert book["home_team"] == "Arsenal"
         assert book["league"] == "E0"
 
-        one_x_two = book["markets"]["1x2"]["dixon_coles"]
-        total = one_x_two["home"] + one_x_two["draw"] + one_x_two["away"]
-        assert total == pytest.approx(1.0)
-
-        elo = book["markets"]["1x2"]["elo"]
-        assert elo["home"] + elo["draw"] + elo["away"] == pytest.approx(1.0)
+        for model_name in ("dixon_coles", "elo", "gbm", "ensemble"):
+            p = book["markets"]["1x2"][model_name]
+            assert p["home"] + p["draw"] + p["away"] == pytest.approx(1.0), model_name
 
         ou25 = book["markets"]["totals"]["2.5"]
         assert ou25["over"] + ou25["under"] == pytest.approx(1.0)
@@ -86,20 +83,31 @@ class TestMarketBook:
         assert book["expected_goals"]["home"] > 0
         assert len(book["markets"]["correct_score_top"]) == 5
 
+        # goals markets derive from the Dixon-Coles matrix, so AH -0.5 home
+        # must equal the DC match-win probability exactly
+        dc_p = book["markets"]["1x2"]["dixon_coles"]
         ah = book["markets"]["asian_handicap"]["-0.5"]
-        assert ah["home"] == pytest.approx(one_x_two["home"], abs=1e-9)
+        assert ah["home"] == pytest.approx(dc_p["home"], abs=1e-9)
+        assert set(book["ensemble_weights"]) == {"dixon_coles", "elo", "gbm"}
 
     def test_unknown_team_raises(self, seeded_session: Session) -> None:
         with pytest.raises(UnknownTeamError):
             build_market_book(seeded_session, "E0", "Atlantis", "Chelsea")
 
-    def test_ev_annotation_when_odds_supplied(self, seeded_session: Session) -> None:
+    def test_ev_annotation_uses_ensemble_probabilities(self, seeded_session: Session) -> None:
         book = build_market_book(
             seeded_session, "E0", "Arsenal", "Chelsea",
             offered_1x2=(2.0, 3.5, 3.8),
         )
         value = book["value_analysis"]
         assert set(value) == {"home", "draw", "away"}
-        p_home = book["markets"]["1x2"]["dixon_coles"]["home"]
+        p_home = book["markets"]["1x2"]["ensemble"]["home"]
         assert value["home"]["expected_value"] == pytest.approx(p_home * 2.0 - 1)
         assert value["home"]["kelly_fraction"] >= 0
+
+    def test_fitted_models_are_cached_per_data_version(self, seeded_session: Session) -> None:
+        from pitchprob.services.prediction import _cached_ensemble
+
+        first = _cached_ensemble(seeded_session, "E0", 390.0)
+        second = _cached_ensemble(seeded_session, "E0", 390.0)
+        assert first is second

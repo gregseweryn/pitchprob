@@ -30,6 +30,8 @@ from pitchprob.evaluation.metrics import (
 from pitchprob.evaluation.staking import simulate_staking
 from pitchprob.models.dixon_coles import DixonColesModel, IndependentPoissonModel
 from pitchprob.models.elo import EloModel
+from pitchprob.models.ensemble import EnsembleModel
+from pitchprob.models.gbm import GbmModel
 from pitchprob.services.prediction import DEFAULT_HALF_LIFE_DAYS, build_market_book
 
 app = typer.Typer(
@@ -79,6 +81,35 @@ def ingest(
                     f"{report.quarantined} quarantined"
                 )
     typer.echo(f"done: {total_matches} matches ingested/refreshed")
+
+
+@app.command()
+def xg(
+    league: Annotated[list[str] | None, typer.Option(help="League code, repeatable")] = None,
+    all_leagues: Annotated[bool, typer.Option("--all", help="All configured leagues")] = False,
+    from_year: Annotated[int, typer.Option(help="First season start year")] = 2014,
+    to_year: Annotated[int, typer.Option(help="Last season start year")] = 2025,
+) -> None:
+    """Attach Understat xG to already-ingested matches (idempotent)."""
+    from pitchprob.data.xg_service import XgUpdateService
+
+    configure_logging(get_settings().log_level)
+    codes = list(LEAGUES) if all_leagues or not league else league
+    downloader = _make_downloader()
+    with session_scope() as session:
+        service = XgUpdateService(session=session, downloader=downloader)
+        for code in codes:
+            for year in range(from_year, to_year + 1):
+                try:
+                    report = service.update_league_season(code, year)
+                except httpx.HTTPError as exc:
+                    typer.echo(f"{code} {year}: download failed ({exc}); skipping")
+                    continue
+                unknown = ", ".join(sorted(report.unmatched_teams)) or "-"
+                typer.echo(
+                    f"{code} {year}: {report.matched}/{report.parsed} matches got xG, "
+                    f"{report.unmatched_matches} unmatched (unknown teams: {unknown})"
+                )
 
 
 @app.command()
@@ -211,7 +242,13 @@ def _model_factory(name: str, half_life: float) -> Any:
         return lambda: IndependentPoissonModel(half_life_days=half_life)
     if key == "elo":
         return lambda: EloModel()
-    raise typer.BadParameter(f"unknown model {name!r} (dixon-coles | poisson | elo)")
+    if key == "gbm":
+        return lambda: GbmModel()
+    if key == "ensemble":
+        return lambda: EnsembleModel(half_life_days=half_life)
+    raise typer.BadParameter(
+        f"unknown model {name!r} (dixon-coles | poisson | elo | gbm | ensemble)"
+    )
 
 
 @app.command()
@@ -225,6 +262,9 @@ def backtest(
         DEFAULT_HALF_LIFE_DAYS
     ),
     ev_threshold: Annotated[float, typer.Option(help="Min EV to place a bet")] = 0.03,
+    pool: Annotated[
+        bool, typer.Option("--pool", help="Train on all leagues, evaluate on --league")
+    ] = False,
 ) -> None:
     """Walk-forward backtest vs the margin-removed Pinnacle closing line."""
     configure_logging(get_settings().log_level)
@@ -232,12 +272,15 @@ def backtest(
     factory = _model_factory(model, half_life)
 
     with session_scope() as session:
-        frame = load_matches_frame(session, league_code=league)
+        frame = load_matches_frame(
+            session, league_code=None if pool else league, include_stats=True
+        )
         if frame.empty:
             typer.echo(f"no matches ingested for {league!r}")
             raise typer.Exit(code=1)
 
-        typer.echo(f"walk-forward backtest: {model} on {league}, start {start_date}, "
+        typer.echo(f"walk-forward backtest: {model} on {league}"
+                   f"{' (pooled training)' if pool else ''}, start {start_date}, "
                    f"refit every {refit_days}d")
         preds = run_backtest(
             frame,
@@ -245,6 +288,7 @@ def backtest(
             start=start_date,
             refit_every_days=refit_days,
             min_train_matches=min_train_matches,
+            predict_only={"league": league} if pool else None,
         )
         if preds.empty:
             typer.echo("no predictions generated (check --start and training history)")

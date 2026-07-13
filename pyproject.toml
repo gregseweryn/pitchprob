@@ -61,7 +61,7 @@ mypy_path = "src"
 packages = ["pitchprob"]
 
 [[tool.mypy.overrides]]
-module = ["scipy.*", "matplotlib.*"]
+module = ["scipy.*", "matplotlib.*", "sklearn.*", "xgboost.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -138,7 +138,10 @@ class EloModel:
         outcomes = np.array([o for _, o in observations], dtype=np.int64)
 
         def nll(x: FloatArray) -> float:
-            scale, cut_low, gap = np.exp(x[0]), x[1], np.exp(x[2])
+            # clip keeps Nelder-Mead from wandering into exp() overflow on
+            # degenerate (tiny/deterministic) training sets
+            scale = np.exp(np.clip(x[0], -10, 12))
+            cut_low, gap = x[1], np.exp(np.clip(x[2], -10, 12))
             cut_high = cut_low + gap
             z = diffs / scale
             p_away = _sigmoid(cut_low - z)
@@ -151,8 +154,10 @@ class EloModel:
 
         x0 = np.array([np.log(200.0), -0.5, 0.0])
         result = minimize(nll, x0, method="Nelder-Mead", options={"maxiter": 2000})
-        scale, cut_low, gap = float(np.exp(result.x[0])), float(result.x[1]), float(
-            np.exp(result.x[2])
+        scale, cut_low, gap = (
+            float(np.exp(np.clip(result.x[0], -10, 12))),
+            float(result.x[1]),
+            float(np.exp(np.clip(result.x[2], -10, 12))),
         )
         self._logit = _OrderedLogit(scale=scale, cut_low=cut_low, cut_high=cut_low + gap)
         return self

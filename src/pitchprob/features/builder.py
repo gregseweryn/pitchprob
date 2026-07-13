@@ -13,7 +13,7 @@ early season" uncertainty the model should see.
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -182,7 +182,7 @@ class FeatureBuilder:
         frame = frame.sort_values("date", kind="stable")
         if "league" not in frame.columns:
             frame["league"] = ""
-        return frame.to_dict("records")
+        return cast(list[dict[str, Any]], frame.to_dict("records"))
 
     # ------------------------------------------------------------------ api
 
@@ -198,15 +198,14 @@ class FeatureBuilder:
         for row in rows:
             features = self._emit(state, str(row["home_team"]), str(row["away_team"]),
                                   row["date"])
-            features.update(
-                {
-                    "date": row["date"],
-                    "league": str(row["league"]),
-                    "home_team": str(row["home_team"]),
-                    "away_team": str(row["away_team"]),
-                }
-            )
-            feature_rows.append(features)
+            feature_row: dict[str, Any] = {
+                **features,
+                "date": row["date"],
+                "league": str(row["league"]),
+                "home_team": str(row["home_team"]),
+                "away_team": str(row["away_team"]),
+            }
+            feature_rows.append(feature_row)
             hg, ag = int(row["ft_home"]), int(row["ft_away"])
             outcomes.append(0 if hg > ag else (1 if hg == ag else 2))
             self._update(state, row)

@@ -6,7 +6,7 @@ forward. Refits happen every ``refit_every_days``; windows with insufficient
 training history produce no predictions rather than degraded ones.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Protocol, cast
@@ -25,6 +25,9 @@ class _Fittable(Protocol):
 #: itertuple with at least .date, .home_team, .away_team.
 PredictFn = Callable[[Any, Any], OutcomeProbabilities]
 
+#: Input columns forwarded into the predictions frame when present.
+_PASSTHROUGH_COLUMNS = ("league",)
+
 
 def outcome_index(ft_home: int, ft_away: int) -> int:
     """0 = home win, 1 = draw, 2 = away win."""
@@ -36,8 +39,14 @@ def outcome_index(ft_home: int, ft_away: int) -> int:
 
 
 def default_predict(model: Any, row: Any) -> OutcomeProbabilities:
-    """Route through the score matrix for goal models, or use the model's own
-    1X2 output for outcome-space models."""
+    """Route to the strongest interface the model offers: date-aware 1X2
+    (feature/ensemble models must know the prediction date), then the score
+    matrix (goal models), then undated 1X2 (outcome-space models)."""
+    if hasattr(model, "match_probabilities_at"):
+        dated: OutcomeProbabilities = model.match_probabilities_at(
+            row.home_team, row.away_team, row.date
+        )
+        return dated
     if hasattr(model, "score_matrix"):
         mo = match_odds(model.score_matrix(row.home_team, row.away_team))
         return OutcomeProbabilities(home=mo.home, draw=mo.draw, away=mo.away)
@@ -59,10 +68,16 @@ def run_backtest(
     refit_every_days: int = 7,
     min_train_matches: int = 380,
     predict: PredictFn | None = None,
+    predict_only: Mapping[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Return one row per out-of-sample prediction with columns
     ``date, home_team, away_team, ft_home, ft_away, p_home, p_draw, p_away,
-    outcome``."""
+    outcome`` (plus ``league`` when the input carries it).
+
+    ``predict_only`` filters the *evaluation* rows by column equality (e.g.
+    ``{"league": "E0"}``) while training still sees the full frame — this is
+    how pooled multi-league training is evaluated per league.
+    """
     validate_matches(matches)
     predict_fn = predict if predict is not None else default_predict
 
@@ -70,6 +85,7 @@ def run_backtest(
     frame["date"] = pd.to_datetime(frame["date"]).dt.date
     frame = frame.sort_values("date", kind="stable").reset_index(drop=True)
     last_date = frame["date"].max()
+    passthrough = [c for c in _PASSTHROUGH_COLUMNS if c in frame.columns]
 
     records: list[dict[str, Any]] = []
     window_start = start
@@ -77,6 +93,9 @@ def run_backtest(
         window = _Window(window_start, window_start + timedelta(days=refit_every_days))
         train = frame[frame["date"] < window.start]
         test = frame[(frame["date"] >= window.start) & (frame["date"] < window.end)]
+        if predict_only is not None:
+            for column, value in predict_only.items():
+                test = test[test[column] == value]
         if len(test) > 0 and len(train) >= min_train_matches:
             model = model_factory()
             model.fit(train)
@@ -84,23 +103,25 @@ def run_backtest(
                 row = cast(Any, raw_row)  # pandas named tuples are untyped
                 probs = predict_fn(model, row)
                 ft_home, ft_away = int(row.ft_home), int(row.ft_away)
-                records.append(
-                    {
-                        "date": row.date,
-                        "home_team": row.home_team,
-                        "away_team": row.away_team,
-                        "ft_home": ft_home,
-                        "ft_away": ft_away,
-                        "p_home": probs.home,
-                        "p_draw": probs.draw,
-                        "p_away": probs.away,
-                        "outcome": outcome_index(ft_home, ft_away),
-                    }
-                )
+                record = {
+                    "date": row.date,
+                    "home_team": row.home_team,
+                    "away_team": row.away_team,
+                    "ft_home": ft_home,
+                    "ft_away": ft_away,
+                    "p_home": probs.home,
+                    "p_draw": probs.draw,
+                    "p_away": probs.away,
+                    "outcome": outcome_index(ft_home, ft_away),
+                }
+                for column in passthrough:
+                    record[column] = getattr(row, column)
+                records.append(record)
         window_start = window.end
 
     columns = [
         "date", "home_team", "away_team", "ft_home", "ft_away",
         "p_home", "p_draw", "p_away", "outcome",
+        *passthrough,
     ]
     return pd.DataFrame(records, columns=columns)
