@@ -100,3 +100,24 @@ def test_backtest_reports_metrics(cli_env) -> None:
     assert result.exit_code == 0, result.output
     assert "log_loss" in result.output
     assert "rps" in result.output
+
+
+def test_backtest_blended_selector(cli_env) -> None:
+    runner.invoke(
+        cli_main.app, ["ingest", "--league", "E0", "--from-year", "2023", "--to-year", "2023"]
+    )
+    result = runner.invoke(
+        cli_main.app,
+        ["backtest", "--league", "E0", "--start", "2023-10-01",
+         "--min-train-matches", "30", "--refit-days", "14",
+         "--selector", "blended", "--blend-weight", "0.4"],
+    )
+    assert result.exit_code == 0, result.output
+    assert '"selector": "blended"' in result.output
+
+
+def test_backtest_rejects_unknown_selector(cli_env) -> None:
+    result = runner.invoke(
+        cli_main.app, ["backtest", "--league", "E0", "--selector", "bogus"]
+    )
+    assert result.exit_code != 0

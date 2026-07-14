@@ -13,6 +13,7 @@ import numpy as np
 import typer
 
 from pitchprob.betting.odds_math import remove_overround_shin
+from pitchprob.betting.selection import select_value_bets
 from pitchprob.core.config import get_settings
 from pitchprob.core.db import session_scope
 from pitchprob.core.errors import PitchprobError
@@ -270,8 +271,19 @@ def backtest(
     pool: Annotated[
         bool, typer.Option("--pool", help="Train on all leagues, evaluate on --league")
     ] = False,
+    selector: Annotated[
+        str, typer.Option(help="Bet selection: naive | blended (ADR 0006)")
+    ] = "naive",
+    blend_weight: Annotated[
+        float, typer.Option(help="Model share in the log-linear blend")
+    ] = 0.4,
+    max_price: Annotated[
+        float, typer.Option(help="Hard price cap for blended selection")
+    ] = 8.0,
 ) -> None:
     """Walk-forward backtest vs the margin-removed Pinnacle closing line."""
+    if selector not in ("naive", "blended"):
+        raise typer.BadParameter(f"unknown selector {selector!r} (naive | blended)")
     configure_logging(get_settings().log_level)
     start_date = date.fromisoformat(start)
     factory = _model_factory(model, half_life)
@@ -353,6 +365,7 @@ def backtest(
                             "probability": float(
                                 getattr(row, ("p_home", "p_draw", "p_away")[sel_idx])
                             ),
+                            "market_probability": float(shin[i, sel_idx]),
                             "price": float(getattr(row, price_cols[selection])),
                             "won": int(row.outcome) == sel_idx,
                             "closing_probability": float(shin[i, sel_idx]),
@@ -360,10 +373,24 @@ def backtest(
                     )
             import pandas as pd
 
-            staking = simulate_staking(
-                pd.DataFrame(candidates), strategy="flat", ev_threshold=ev_threshold
-            )
+            candidate_frame = pd.DataFrame(candidates)
+            if selector == "blended":
+                selected = select_value_bets(
+                    candidate_frame,
+                    blend_weight=blend_weight,
+                    ev_threshold=ev_threshold,
+                    max_price=max_price,
+                )
+                # bets are pre-qualified on blended EV; settle them all at
+                # the anchored probability
+                sim_frame = selected.assign(probability=selected["p_bet"])
+                staking = simulate_staking(sim_frame, strategy="flat", ev_threshold=-1.0)
+            else:
+                staking = simulate_staking(
+                    candidate_frame, strategy="flat", ev_threshold=ev_threshold
+                )
             metrics["staking_flat"] = {
+                "selector": selector,
                 "n_bets": staking.n_bets,
                 "roi": staking.roi,
                 "profit_units": staking.profit,
