@@ -55,7 +55,11 @@ def synthetic_frame(n: int = 900, seed: int = 13) -> pd.DataFrame:
 
 @pytest.fixture(scope="module")
 def fitted() -> CalibratedEnsembleModel:
-    model = CalibratedEnsembleModel(base_factory=BiasedBase, calib_holdout=400)
+    # isotonic explicitly: the constant-bias correction below is its property
+    # (temperature, the production default, cannot move classes independently)
+    model = CalibratedEnsembleModel(
+        base_factory=BiasedBase, calib_holdout=400, method="isotonic"
+    )
     model.fit(synthetic_frame())
     return model
 

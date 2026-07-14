@@ -307,7 +307,7 @@ def coupon(
     typer.echo(f"\n{INDEPENDENCE_CAVEAT}")
 
 
-def _model_factory(name: str, half_life: float) -> Any:
+def _model_factory(name: str, half_life: float, calibration: str = "isotonic") -> Any:
     key = name.replace("_", "-").lower()
     if key == "dixon-coles":
         return lambda: DixonColesModel(half_life_days=half_life)
@@ -322,7 +322,12 @@ def _model_factory(name: str, half_life: float) -> Any:
     if key == "ensemble-cal":
         from pitchprob.models.calibrated import CalibratedEnsembleModel
 
-        return lambda: CalibratedEnsembleModel(half_life_days=half_life)
+        if calibration not in ("isotonic", "temperature"):
+            raise typer.BadParameter(f"unknown calibration {calibration!r}")
+        return lambda: CalibratedEnsembleModel(
+            half_life_days=half_life,
+            method=cast(Any, calibration),
+        )
     raise typer.BadParameter(
         f"unknown model {name!r} "
         "(dixon-coles | poisson | elo | gbm | ensemble | ensemble-cal)"
@@ -352,13 +357,16 @@ def backtest(
     max_price: Annotated[
         float, typer.Option(help="Hard price cap for blended selection")
     ] = 8.0,
+    calibration: Annotated[
+        str, typer.Option(help="ensemble-cal method: isotonic | temperature")
+    ] = "isotonic",
 ) -> None:
     """Walk-forward backtest vs the margin-removed Pinnacle closing line."""
     if selector not in ("naive", "blended"):
         raise typer.BadParameter(f"unknown selector {selector!r} (naive | blended)")
     configure_logging(get_settings().log_level)
     start_date = date.fromisoformat(start)
-    factory = _model_factory(model, half_life)
+    factory = _model_factory(model, half_life, calibration)
 
     with session_scope() as session:
         frame = load_matches_frame(

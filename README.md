@@ -136,6 +136,33 @@ from zero — exactly what an honest engine should report at this stage.
 Reproduce with: `uv run pitchprob backtest --league E0 --start 2021-08-01
 --model ensemble --refit-days 28 --selector blended`.
 
+### M4.5: the calibration experiment (a negative result worth keeping)
+
+The M3 hypothesis — fix the ensemble's draw/away tails and its betting
+losses follow — was tested with `CalibratedEnsembleModel` (per-class
+recalibration on a chronological holdout disjoint from the stack holdout;
+backtests now report ECE for *all three* classes):
+
+| E0 2021–26 (n=1730, blended selector) | log-loss | ECE h/d/a | ROI | CLV |
+|---|---|---|---|---|
+| Dixon-Coles | 0.9725 | — | **−0.7%** | +1.3% |
+| Raw ensemble | 0.9756 | .014 / – / – | −8.9% | +1.6% |
+| + isotonic calibration | 1.3012 | .054/.072/.062 | −8.1% | +1.0% |
+| + temperature calibration | 0.9815 | **.017/.018/.019** | −8.2% | +1.3% |
+
+Two findings. First, isotonic **detonated** — step functions overfit
+190-match calibration windows into worse-than-uniform log-loss; temperature
+(one parameter) is the default for a reason. Second and more important:
+temperature delivered the best per-class calibration of any model tested,
+and the betting ROI *barely moved*. The ensemble's betting failure is not
+marginal miscalibration — it is conditional, price-correlated error that no
+marginal recalibration can repair. **Marginally calibrated is not
+conditionally exploitable.** The betting path stays on Dixon-Coles; the
+next credible attack on the gap is training on regions where the model has
+demonstrated closing-line value, not post-hoc probability surgery (M5+).
+
+Reproduce with: `... --model ensemble-cal --calibration temperature`.
+
 ### M2 results: does the ML layer help? (same protocol, 28-day refits)
 
 | E0 2021–26, closing-odds subset (n=1730) | log-loss | RPS | ECE (home) |

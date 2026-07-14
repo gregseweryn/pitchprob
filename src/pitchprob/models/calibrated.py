@@ -16,6 +16,14 @@ Fit protocol (three chronological segments, no lookahead):
 
 The calibrators are fit on out-of-sample predictions, mirroring how the
 ensemble itself fits its stack — the standard two-stage pattern.
+
+Empirical verdict (E0 2021-26 walk-forward, 190-match calibration windows):
+temperature is the default because isotonic's step functions overfit small
+holdouts catastrophically (log-loss 1.30 vs 0.98 — worse than uniform).
+Temperature delivered uniform per-class ECE ~0.018, the best of any model
+tested — and betting ROI still barely moved, which is the deeper lesson:
+marginal calibration does not repair conditional, price-correlated errors.
+The betting path therefore remains Dixon-Coles (see README).
 """
 
 from collections.abc import Callable
@@ -51,7 +59,7 @@ class CalibratedEnsembleModel:
         stack_holdout: int = 380,
         calib_holdout: int = 190,
         min_train: int = 200,
-        method: CalibrationMethod = "isotonic",
+        method: CalibrationMethod = "temperature",
         base_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.half_life_days = half_life_days
