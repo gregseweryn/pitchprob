@@ -100,6 +100,11 @@ def test_backtest_reports_metrics(cli_env) -> None:
     assert result.exit_code == 0, result.output
     assert "log_loss" in result.output
     assert "rps" in result.output
+    # calibration must be reported for every class, not just home (M3 lesson:
+    # calibration where you display is not calibration where you bet)
+    assert "ece_home" in result.output
+    assert "ece_draw" in result.output
+    assert "ece_away" in result.output
 
 
 def test_backtest_blended_selector(cli_env) -> None:

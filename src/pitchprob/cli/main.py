@@ -319,8 +319,13 @@ def _model_factory(name: str, half_life: float) -> Any:
         return lambda: GbmModel()
     if key == "ensemble":
         return lambda: EnsembleModel(half_life_days=half_life)
+    if key == "ensemble-cal":
+        from pitchprob.models.calibrated import CalibratedEnsembleModel
+
+        return lambda: CalibratedEnsembleModel(half_life_days=half_life)
     raise typer.BadParameter(
-        f"unknown model {name!r} (dixon-coles | poisson | elo | gbm | ensemble)"
+        f"unknown model {name!r} "
+        "(dixon-coles | poisson | elo | gbm | ensemble | ensemble-cal)"
     )
 
 
@@ -380,15 +385,19 @@ def backtest(
 
         probs = preds[["p_home", "p_draw", "p_away"]].to_numpy(dtype=np.float64)
         outcomes = preds["outcome"].to_numpy(dtype=np.int64)
+        per_class_ece = {
+            f"ece_{name}": expected_calibration_error(
+                (outcomes == index).astype(np.int64), probs[:, index]
+            )
+            for index, name in enumerate(("home", "draw", "away"))
+        }
         metrics: dict[str, Any] = {
             "n_predictions": len(preds),
             "model": {
                 "log_loss": log_loss(outcomes, probs),
                 "brier": brier_score(outcomes, probs),
                 "rps": ranked_probability_score(outcomes, probs),
-                "ece_home": expected_calibration_error(
-                    (outcomes == 0).astype(np.int64), probs[:, 0]
-                ),
+                **per_class_ece,
             },
         }
 
