@@ -144,6 +144,24 @@ class OddsQuote(Base):
     match: Mapped[Match] = relationship(back_populates="odds")
 
 
+class Injury(Base):
+    """A player listed as unavailable/doubtful for one fixture (API-Football
+    free-tier research corpus, ADR 0008). Joined to matches by team + date
+    with ±1-day tolerance, never by fixture id."""
+
+    __tablename__ = "injuries"
+    __table_args__ = (UniqueConstraint("team_id", "match_date", "player_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), index=True)
+    match_date: Mapped[date] = mapped_column(Date, index=True)
+    player_name: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(String(64))
+    season: Mapped[int]
+
+    team: Mapped[Team] = relationship()
+
+
 class ModelRun(Base):
     __tablename__ = "model_runs"
 

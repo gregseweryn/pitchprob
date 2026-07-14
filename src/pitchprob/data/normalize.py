@@ -113,6 +113,24 @@ def understat_canonical(name: str) -> str:
     return _UNDERSTAT_OVERRIDES.get(name, name)
 
 
+#: API-Football team names that differ from our canonical spellings beyond
+#: what token normalization bridges. Extended iteratively from ingestion
+#: reports, exactly like the Understat map.
+_API_FOOTBALL_OVERRIDES: dict[str, str] = {
+    "Athletic Club": "Athletic Bilbao",
+    "Wolves": "Wolverhampton Wanderers",
+    "Paris Saint Germain": "Paris Saint-Germain",
+    "Borussia Mönchengladbach": "Borussia Monchengladbach",
+    "1.FC Köln": "FC Cologne",
+    "FC Köln": "FC Cologne",
+    "Bayern München": "Bayern Munich",
+}
+
+
+def api_football_canonical(name: str) -> str:
+    return _API_FOOTBALL_OVERRIDES.get(name, name)
+
+
 _NOISE_TOKENS = frozenset(
     {"fc", "cf", "sd", "sv", "ac", "as", "calcio", "1913", "2013", "04", "05", "96", "1899"}
 )

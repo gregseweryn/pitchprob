@@ -117,6 +117,44 @@ def xg(
 
 
 @app.command()
+def injuries(
+    league: Annotated[list[str] | None, typer.Option(help="League code, repeatable")] = None,
+    all_leagues: Annotated[bool, typer.Option("--all", help="All configured leagues")] = False,
+    from_season: Annotated[int, typer.Option(help="First season start year")] = 2022,
+    to_season: Annotated[int, typer.Option(help="Last season start year")] = 2024,
+) -> None:
+    """Ingest API-Football injury lists (free tier: seasons 2022-2024, ADR 0008)."""
+    from pitchprob.data.adapters.api_football import ApiFootballClient, ApiFootballError
+    from pitchprob.data.injury_service import InjuryUpdateService
+
+    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    try:
+        client = ApiFootballClient(
+            key=settings.api_football_key, cache_dir=settings.data_dir / "raw"
+        )
+    except ApiFootballError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    codes = list(LEAGUES) if all_leagues or not league else league
+    with session_scope() as session:
+        service = InjuryUpdateService(session=session, client=client)
+        for code in codes:
+            for season in range(from_season, to_season + 1):
+                try:
+                    report = service.update_league_season(code, season)
+                except (ApiFootballError, ValueError, httpx.HTTPError) as exc:
+                    typer.echo(f"{code} {season}: failed ({exc}); skipping")
+                    continue
+                unknown = ", ".join(sorted(report.unmatched_teams)) or "-"
+                typer.echo(
+                    f"{code} {season}: {report.inserted} new of {report.parsed} records "
+                    f"(unknown teams: {unknown})"
+                )
+
+
+@app.command()
 def train(
     league: Annotated[str, typer.Option(help="League code")] = "E0",
     half_life: Annotated[float, typer.Option(help="Time-decay half-life, days")] = (

@@ -12,15 +12,15 @@ unit tests. Ingestion volume (~35k matches) does not justify dialect forks.
 """
 
 from collections.abc import Iterable, Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from pitchprob.core.errors import UnknownTeamError
-from pitchprob.data.orm import League, Match, OddsQuote, Season, Team, TeamAlias
+from pitchprob.data.orm import Injury, League, Match, OddsQuote, Season, Team, TeamAlias
 
 # Optional per-match statistics that may arrive (or improve) on re-ingest.
 _MATCH_OPTIONAL_FIELDS = (
@@ -167,6 +167,61 @@ class MatchRepository:
                 setattr(match, field, value)
         session.flush()
         return match, created
+
+
+class InjuryRepository:
+    @staticmethod
+    def upsert(
+        session: Session,
+        *,
+        team_id: int,
+        match_date: date,
+        player_name: str,
+        reason: str | None,
+        season: int,
+    ) -> bool:
+        """Insert by natural key (team, date, player); returns True when a
+        new row was created."""
+        existing = session.execute(
+            select(Injury).where(
+                Injury.team_id == team_id,
+                Injury.match_date == match_date,
+                Injury.player_name == player_name,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.reason = reason
+            existing.season = season
+            session.flush()
+            return False
+        session.add(
+            Injury(
+                team_id=team_id,
+                match_date=match_date,
+                player_name=player_name,
+                reason=reason,
+                season=season,
+            )
+        )
+        session.flush()
+        return True
+
+    @staticmethod
+    def count_absences(session: Session, *, team_id: int, match_date: date) -> int:
+        """Listed absences for a team around a date (±1 day: the source and
+        football-data disagree on timezones exactly like Understat does)."""
+        low, high = match_date - timedelta(days=1), match_date + timedelta(days=1)
+        return int(
+            session.execute(
+                select(func.count())
+                .select_from(Injury)
+                .where(
+                    Injury.team_id == team_id,
+                    Injury.match_date >= low,
+                    Injury.match_date <= high,
+                )
+            ).scalar_one()
+        )
 
 
 class OddsRepository:

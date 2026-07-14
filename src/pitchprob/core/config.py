@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://pitchprob:pitchprob@localhost:5433/pitchprob"
     log_level: str = "INFO"
     data_dir: Path = Path("./data")
+    #: api-sports.io key (free tier = research instrument; see ADR 0008)
+    api_football_key: str | None = None
 
 
 @lru_cache(maxsize=1)
