@@ -11,7 +11,7 @@ benchmarked against the closing line.
 > plainly when the models fall short of it. They usually do; that is the expected result
 > and the reports are designed to show it rather than hide it.
 
-## What works today (M1 probability core + M2 ML layer)
+## What works today (M1 core + M2 ML + M3 betting engine)
 
 - **Data**: 21,589 matches across the top-5 European leagues (EPL, La Liga, Bundesliga,
   Serie A, Ligue 1), seasons 2014/15–2025/26, ingested from football-data.co.uk with
@@ -32,6 +32,12 @@ benchmarked against the closing line.
   Score, and Asian Handicap with full quarter-line split-stake settlement semantics.
 - **Betting math**: implied probabilities, multiplicative and Shin overround removal,
   fair odds, EV, fractional Kelly.
+- **M3 betting engine**: vig-aware bet selection (model probabilities log-linearly
+  anchored to the de-margined market, hard price cap — ADR 0006), negative-binomial
+  corners and cards models with O/U lines in every book, risk-tiered coupon
+  generation (safe/balanced/value/high-risk bands) with per-leg machine-generated
+  reasoning and an explicit independence caveat, and a fixtures.csv adapter so
+  `pitchprob coupon` runs against the live upcoming-matches feed.
 - **Evaluation**: walk-forward backtester (its no-lookahead property is itself under
   test), log-loss / Brier / RPS / ECE, reliability tables, and staking simulation
   (flat + compounding Kelly) with closing-line value.
@@ -101,6 +107,30 @@ crossing it.
 Reproduce with: `uv run pitchprob backtest --league E0 --start 2021-08-01`
 (results are stored in the `backtests` table).
 
+### M3: what vig-aware selection did (and honestly did not) fix
+
+Same protocol, flat stakes on selections with EV > 3% at best listed prices:
+
+| E0 2021–26 | naive ROI | blended ROI (w=0.4, cap 8.0) | naive CLV | blended CLV |
+|---|---|---|---|---|
+| Dixon-Coles | −0.2% (2,194 bets) | −0.7% (1,560 bets) | +0.4% | **+1.3%** |
+| Ensemble | −11.2% (2,192 bets) | −8.9% (1,537 bets) | +0.5% | **+1.6%** |
+
+Anchoring to the market improved every diagnostic — 30% fewer bets, higher hit
+rates, closing-line value tripled — but it cannot rescue a model with biased
+tails: under *identical* selection the ensemble still loses 8× more than
+Dixon-Coles. The ensemble's calibration win (ECE 0.014) was measured on the
+home outcome; its draw/away tails are where the losing bets come from.
+Calibration where you display is not calibration where you bet. Consequently
+the current recommendation baked into the docs: **the betting path uses
+Dixon-Coles probabilities; the ensemble serves the headline display** until
+per-class calibration lands in M4. ROI confidence bands at ~1,500 bets are
+roughly ±5pp, so DC-blended's true edge is statistically indistinguishable
+from zero — exactly what an honest engine should report at this stage.
+
+Reproduce with: `uv run pitchprob backtest --league E0 --start 2021-08-01
+--model ensemble --refit-days 28 --selector blended`.
+
 ### M2 results: does the ML layer help? (same protocol, 28-day refits)
 
 | E0 2021–26, closing-odds subset (n=1730) | log-loss | RPS | ECE (home) |
@@ -168,7 +198,7 @@ make test-int    # Postgres integration tests (needs make db-up)
 |---|---|
 | **M1 ✓** | Probability core: data, DC/Poisson/Elo, markets, EV, honest backtests, CLI + API |
 | **M2 ✓** | xG (Understat), feature builder, XGBoost, calibration, stacking ensemble, model cache |
-| M3 | Full betting engine: vig-aware bet selection, coupon generator with risk tiers, corners/cards models (data already ingested) |
+| **M3 ✓** | Vig-aware selection, NegBin corners/cards, risk-tiered coupons with reasons, fixtures feed |
 | M4 | Next.js dashboard |
 | M5 | Live-info engine (API-Football) + LLM news intelligence |
 | M6 | Deployment hardening (Docker images, CI/CD) |
