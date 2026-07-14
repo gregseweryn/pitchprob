@@ -14,10 +14,12 @@ Asian handicap entries report, per line, the probability that a bet on each
 side wins (fully or half) plus the push probability.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -35,6 +37,7 @@ from pitchprob.markets import (
     totals,
 )
 from pitchprob.models.base import OutcomeProbabilities
+from pitchprob.models.counts import NegBinCountsModel
 from pitchprob.models.ensemble import EnsembleModel
 
 DISCLAIMER = (
@@ -45,6 +48,13 @@ DISCLAIMER = (
 _TOTALS_LINES = ("0.5", "1.5", "2.5", "3.5", "4.5")
 _AH_LINES = ("-2", "-1.5", "-1", "-0.5", "-0.25", "0", "0.25", "0.5", "1", "1.5", "2")
 _TOP_SCORES = 5
+_CORNER_LINES = ("7.5", "8.5", "9.5", "10.5", "11.5", "12.5")
+_CARD_LINES = ("1.5", "2.5", "3.5", "4.5", "5.5", "6.5")
+
+COUNTS_CAVEAT = (
+    "Corners/cards estimates come from team-rate models without referee or "
+    "lineup information; treat them as wider-uncertainty than goals markets."
+)
 
 #: Default Dixon-Coles half-life; ~390 days is the common sweet spot reported
 #: in the club-football literature (recent form matters, but one season of
@@ -52,7 +62,16 @@ _TOP_SCORES = 5
 DEFAULT_HALF_LIFE_DAYS = 390.0
 
 #: Fitted ensembles keyed by (league, half_life, n_matches, max_match_id).
-_ENSEMBLE_CACHE: dict[tuple[str, float | None, int, int], EnsembleModel] = {}
+@dataclass(frozen=True, slots=True)
+class LeagueModels:
+    """Everything fitted for one league at one data version."""
+
+    ensemble: EnsembleModel
+    corners: NegBinCountsModel | None
+    cards: NegBinCountsModel | None
+
+
+_MODEL_CACHE: dict[tuple[str, float | None, int, int], LeagueModels] = {}
 
 
 def _data_version(session: Session, league_code: str) -> tuple[int, int]:
@@ -66,12 +85,24 @@ def _data_version(session: Session, league_code: str) -> tuple[int, int]:
     return int(row[0]), int(row[1])
 
 
-def _cached_ensemble(
+def _fit_counts(
+    frame: pd.DataFrame, home_column: str, away_column: str
+) -> NegBinCountsModel | None:
+    """Fit a counts model, or return None when the stat isn't recorded."""
+    try:
+        return NegBinCountsModel(
+            home_column=home_column, away_column=away_column
+        ).fit(frame)
+    except ValueError:
+        return None
+
+
+def _cached_models(
     session: Session, league_code: str, half_life_days: float | None
-) -> EnsembleModel:
+) -> LeagueModels:
     version = _data_version(session, league_code)
     key = (league_code, half_life_days, *version)
-    cached = _ENSEMBLE_CACHE.get(key)
+    cached = _MODEL_CACHE.get(key)
     if cached is not None:
         return cached
 
@@ -82,19 +113,54 @@ def _cached_ensemble(
     # (and test fixtures) still fit; 380 ≈ one EPL season is the ceiling.
     holdout = min(380, max(10, len(frame) // 5))
     min_train = max(1, min(200, len(frame) - holdout))
-    model = EnsembleModel(
+    ensemble = EnsembleModel(
         half_life_days=half_life_days, holdout=holdout, min_train=min_train
     ).fit(frame)
 
+    frame = frame.assign(
+        cards_home=frame["yellows_home"] + frame["reds_home"],
+        cards_away=frame["yellows_away"] + frame["reds_away"],
+    )
+    bundle = LeagueModels(
+        ensemble=ensemble,
+        corners=_fit_counts(frame, "corners_home", "corners_away"),
+        cards=_fit_counts(frame, "cards_home", "cards_away"),
+    )
+
     # Retain only the newest version per league to bound memory.
-    for stale in [k for k in _ENSEMBLE_CACHE if k[0] == league_code]:
-        del _ENSEMBLE_CACHE[stale]
-    _ENSEMBLE_CACHE[key] = model
-    return model
+    for stale in [k for k in _MODEL_CACHE if k[0] == league_code]:
+        del _MODEL_CACHE[stale]
+    _MODEL_CACHE[key] = bundle
+    return bundle
+
+
+def _cached_ensemble(
+    session: Session, league_code: str, half_life_days: float | None
+) -> EnsembleModel:
+    return _cached_models(session, league_code, half_life_days).ensemble
 
 
 def _probs_dict(p: OutcomeProbabilities) -> dict[str, float]:
     return {"home": p.home, "draw": p.draw, "away": p.away}
+
+
+def _counts_section(
+    model: NegBinCountsModel | None, home: str, away: str, lines: tuple[str, ...]
+) -> dict[str, Any] | None:
+    if model is None:
+        return None
+    mu_h, mu_a = model.expected_counts(home, away)
+    matrix = model.counts_matrix(home, away)
+    return {
+        "expected": {"home": mu_h, "away": mu_a, "total": mu_h + mu_a},
+        "totals": {
+            line: {
+                "over": totals(matrix, Decimal(line)).over,
+                "under": totals(matrix, Decimal(line)).under,
+            }
+            for line in lines
+        },
+    }
 
 
 def build_market_book(
@@ -117,7 +183,8 @@ def build_market_book(
                 "use the canonical team name"
             )
 
-    ensemble = _cached_ensemble(session, league_code, half_life_days)
+    bundle = _cached_models(session, league_code, half_life_days)
+    ensemble = bundle.ensemble
     components = ensemble.components_
     dc = components["dixon_coles"]
 
@@ -191,6 +258,15 @@ def build_market_book(
         },
         "disclaimer": DISCLAIMER,
     }
+
+    counts_markets: dict[str, Any] = {"caveat": COUNTS_CAVEAT}
+    corners = _counts_section(bundle.corners, home_team, away_team, _CORNER_LINES)
+    if corners is not None:
+        counts_markets["corners"] = corners
+    cards = _counts_section(bundle.cards, home_team, away_team, _CARD_LINES)
+    if cards is not None:
+        counts_markets["cards"] = cards
+    book["counts_markets"] = counts_markets
 
     if offered_1x2 is not None:
         probabilities = one_x_two["ensemble"]

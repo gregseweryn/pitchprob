@@ -22,6 +22,10 @@ STATS_COLUMNS = [
     "shots_on_target_away",
     "corners_home",
     "corners_away",
+    "yellows_home",
+    "yellows_away",
+    "reds_home",
+    "reds_away",
     "xg_home",
     "xg_away",
 ]
@@ -61,6 +65,10 @@ def load_matches_frame(
             Match.shots_on_target_away,
             Match.corners_home,
             Match.corners_away,
+            Match.yellows_home,
+            Match.yellows_away,
+            Match.reds_home,
+            Match.reds_away,
             Match.xg_home,
             Match.xg_away,
         ]

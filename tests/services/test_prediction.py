@@ -111,3 +111,21 @@ class TestMarketBook:
         first = _cached_ensemble(seeded_session, "E0", 390.0)
         second = _cached_ensemble(seeded_session, "E0", 390.0)
         assert first is second
+
+    def test_counts_markets_present(self, seeded_session: Session) -> None:
+        book = build_market_book(seeded_session, "E0", "Arsenal", "Chelsea")
+        counts = book["counts_markets"]
+        assert "caveat" in counts
+
+        corners = counts["corners"]
+        assert corners["expected"]["home"] > 0
+        assert corners["expected"]["total"] == pytest.approx(
+            corners["expected"]["home"] + corners["expected"]["away"]
+        )
+        ou = corners["totals"]["9.5"]
+        assert ou["over"] + ou["under"] == pytest.approx(1.0)
+
+        cards = counts["cards"]
+        assert cards["expected"]["total"] > 0
+        ou_cards = cards["totals"]["3.5"]
+        assert ou_cards["over"] + ou_cards["under"] == pytest.approx(1.0)

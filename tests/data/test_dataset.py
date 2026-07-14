@@ -48,7 +48,9 @@ class TestMatchesFrameWithStats:
         expected_extra = {
             "league", "shots_home", "shots_away",
             "shots_on_target_home", "shots_on_target_away",
-            "corners_home", "corners_away", "xg_home", "xg_away",
+            "corners_home", "corners_away",
+            "yellows_home", "yellows_away", "reds_home", "reds_away",
+            "xg_home", "xg_away",
         }
         assert expected_extra <= set(frame.columns)
         assert set(frame["league"]) == {"E0"}
