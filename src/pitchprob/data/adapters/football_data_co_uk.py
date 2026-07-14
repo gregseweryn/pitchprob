@@ -26,6 +26,11 @@ from pitchprob.data.domain import MatchRecord, OddsQuoteRecord, ParseResult, Qua
 
 SOURCE = "football-data"
 BASE_URL = "https://www.football-data.co.uk/mmz4281"
+FIXTURES_URL = "https://www.football-data.co.uk/fixtures.csv"
+
+#: Leagues this platform models (mirrors service.LEAGUES; kept here so the
+#: adapter has no upward dependency).
+KNOWN_DIVISIONS = ("E0", "SP1", "D1", "I1", "F1")
 
 # Kickoff times on football-data.co.uk are UK local time for all leagues.
 _UK_TZ = ZoneInfo("Europe/London")
@@ -212,6 +217,53 @@ def _parse_odds(row: dict[str, str | None]) -> tuple[OddsQuoteRecord, ...]:
             )
         )
     return tuple(quotes)
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureRecord:
+    """An upcoming match from fixtures.csv: no result, optional offered odds."""
+
+    league_code: str
+    match_date: date
+    kickoff_utc: datetime | None
+    home_team: str
+    away_team: str
+    odds_1x2: tuple[float, float, float] | None
+
+
+def parse_fixtures_csv(content: bytes) -> tuple[FixtureRecord, ...]:
+    """Parse the site-wide fixtures.csv; rows outside KNOWN_DIVISIONS or
+    without date/teams are skipped (fixtures are transient inputs — there is
+    nothing to quarantine)."""
+    reader = csv.DictReader(io.StringIO(_decode(content)))
+    fixtures: list[FixtureRecord] = []
+    for row in reader:
+        division = _cell(row, "Div")
+        if division not in KNOWN_DIVISIONS:
+            continue
+        match_date = _parse_date(_cell(row, "Date"))
+        home, away = _cell(row, "HomeTeam"), _cell(row, "AwayTeam")
+        if match_date is None or not home or not away:
+            continue
+        price_h = _decimal_or_none(_cell(row, "B365H"))
+        price_d = _decimal_or_none(_cell(row, "B365D"))
+        price_a = _decimal_or_none(_cell(row, "B365A"))
+        odds_1x2 = (
+            (float(price_h), float(price_d), float(price_a))
+            if price_h is not None and price_d is not None and price_a is not None
+            else None
+        )
+        fixtures.append(
+            FixtureRecord(
+                league_code=division,
+                match_date=match_date,
+                kickoff_utc=_parse_kickoff(match_date, _cell(row, "Time")),
+                home_team=home,
+                away_team=away,
+                odds_1x2=odds_1x2,
+            )
+        )
+    return tuple(fixtures)
 
 
 def parse_csv(content: bytes, *, start_year: int) -> ParseResult:

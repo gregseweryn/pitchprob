@@ -9,7 +9,7 @@ renormalized over the outcome space (for per-selection rows: the selection vs
 its complement). Selection then demands (a) expected value at the offered
 price computed from ``p_bet``, and (b) an offered price below a hard cap —
 beyond it the edge estimate is model noise amplified by the favourite-longshot
-margin structure, the exact failure quantified at −11.2% ROI in M2.
+margin structure, the exact failure quantified at -11.2% ROI in M2.
 """
 
 import math
@@ -79,10 +79,11 @@ def select_value_bets(
             continue
         p_model = float(row.probability)
         p_market = float(row.market_probability) if has_market else float("nan")
-        if math.isnan(p_market):
-            p_bet = p_model
-        else:
-            p_bet = _blend_binary(p_model, p_market, blend_weight)
+        p_bet = (
+            p_model
+            if math.isnan(p_market)
+            else _blend_binary(p_model, p_market, blend_weight)
+        )
         expected_value = p_bet * price - 1.0
         if expected_value <= ev_threshold:
             continue

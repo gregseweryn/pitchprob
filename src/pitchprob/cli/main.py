@@ -240,6 +240,73 @@ def predict(
     typer.echo(f"\n{book['disclaimer']}")
 
 
+@app.command()
+def coupon(
+    tier: Annotated[str, typer.Option(help="safe | balanced | value | high_risk")] = "balanced",
+    fixture: Annotated[
+        list[str] | None,
+        typer.Option(help='Explicit fixture "Home,Away,LEAGUE" (canonical names), repeatable'),
+    ] = None,
+    league: Annotated[
+        list[str] | None, typer.Option(help="Restrict fixtures.csv to these leagues")
+    ] = None,
+    max_legs: Annotated[int, typer.Option(help="Maximum legs per coupon")] = 4,
+    top: Annotated[int, typer.Option(help="Coupons to show per tier")] = 5,
+    max_fixtures: Annotated[int, typer.Option(help="Fixture cap from fixtures.csv")] = 12,
+) -> None:
+    """Generate risk-tiered coupons with per-leg reasoning (ADR 0006)."""
+    from pitchprob.data.adapters.football_data_co_uk import FIXTURES_URL, parse_fixtures_csv
+    from pitchprob.data.normalize import canonical_team_name
+    from pitchprob.services.coupons import INDEPENDENCE_CAVEAT, TIERS, generate_coupons
+
+    configure_logging(get_settings().log_level)
+    if tier not in TIERS:
+        raise typer.BadParameter(f"unknown tier {tier!r}; expected one of {sorted(TIERS)}")
+
+    entries: list[tuple[str, str, str]] = []
+    if fixture:
+        for spec in fixture:
+            parts = [p.strip() for p in spec.split(",")]
+            if len(parts) != 3:
+                raise typer.BadParameter(f'fixture must be "Home,Away,LEAGUE", got {spec!r}')
+            entries.append((parts[0], parts[1], parts[2]))
+    else:
+        raw = HttpDownloader(cache_dir=None).get(FIXTURES_URL)
+        wanted = set(league) if league else set(LEAGUES)
+        entries = [
+            (canonical_team_name(f.home_team), canonical_team_name(f.away_team), f.league_code)
+            for f in parse_fixtures_csv(raw)
+            if f.league_code in wanted
+        ][:max_fixtures]
+        if not entries:
+            typer.echo("No upcoming fixtures found for the configured leagues.")
+            return
+
+    books = []
+    with session_scope() as session:
+        for home, away, league_code in entries:
+            try:
+                books.append(build_market_book(session, league_code, home, away))
+            except (PitchprobError, ValueError) as exc:
+                typer.echo(f"skipping {home} vs {away}: {exc}")
+
+    coupons = generate_coupons(books, tier=tier, max_legs=max_legs, top_n=top)
+    if not coupons:
+        typer.echo(f"No coupons reach the {tier} band "
+                   f"({TIERS[tier][0]:.0%}-{TIERS[tier][1]:.0%}) from these fixtures.")
+        return
+
+    typer.echo(f"\n=== {tier} coupons (band {TIERS[tier][0]:.0%}-{TIERS[tier][1]:.0%}) ===")
+    for rank, item in enumerate(coupons, start=1):
+        typer.echo(f"\n#{rank}  joint probability {item.joint_probability:.1%}")
+        for leg in item.legs:
+            typer.echo(f"  {leg.match_label} — {leg.market}: {leg.selection} "
+                       f"({leg.probability:.0%})")
+            for reason in leg.reasons:
+                typer.echo(f"      + {reason}")
+    typer.echo(f"\n{INDEPENDENCE_CAVEAT}")
+
+
 def _model_factory(name: str, half_life: float) -> Any:
     key = name.replace("_", "-").lower()
     if key == "dixon-coles":

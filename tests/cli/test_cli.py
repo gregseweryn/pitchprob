@@ -121,3 +121,27 @@ def test_backtest_rejects_unknown_selector(cli_env) -> None:
         cli_main.app, ["backtest", "--league", "E0", "--selector", "bogus"]
     )
     assert result.exit_code != 0
+
+
+def test_coupon_with_explicit_fixtures(cli_env) -> None:
+    runner.invoke(
+        cli_main.app, ["ingest", "--league", "E0", "--from-year", "2023", "--to-year", "2023"]
+    )
+    result = runner.invoke(
+        cli_main.app,
+        ["coupon", "--tier", "high_risk",
+         "--fixture", "Arsenal,Chelsea,E0",
+         "--fixture", "Liverpool,Everton,E0",
+         "--max-legs", "2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert ("coupons" in result.output) or ("No coupons" in result.output)
+    if "joint probability" in result.output:
+        assert "+ " in result.output  # reasons rendered
+
+
+def test_coupon_rejects_unknown_tier(cli_env) -> None:
+    result = runner.invoke(
+        cli_main.app, ["coupon", "--tier", "yolo", "--fixture", "A,B,E0"]
+    )
+    assert result.exit_code != 0

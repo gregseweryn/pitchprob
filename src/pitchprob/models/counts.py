@@ -2,7 +2,7 @@
 
 NB2 parameterization: ``Y ~ NB(mean mu, dispersion r)`` with
 ``Var = mu + mu^2 / r`` — corners and cards are overdispersed
-(variance/mean ≈ 1.2–1.6), so a Poisson model would understate tail prices.
+(variance/mean of roughly 1.2-1.6), so Poisson would understate tail prices.
 Structure mirrors Dixon-Coles: per-team attack/defence and home advantage on
 a log link,
 
@@ -19,9 +19,10 @@ One class serves both statistics: instantiate with ``home_column="corners_home"`
 or a derived ``cards_home`` (yellows + reds) column.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-from typing import Self
+from typing import Self, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -35,6 +36,8 @@ from pitchprob.models.base import validate_matches
 from pitchprob.models.dixon_coles import time_decay_weights
 
 FloatArray = npt.NDArray[np.float64]
+Objective = Callable[[FloatArray], float]
+Gradient = Callable[[FloatArray], FloatArray]
 
 
 @dataclass
@@ -79,7 +82,9 @@ class NegBinCountsModel:
             )
         return frame
 
-    def build_objective(self, matches: pd.DataFrame, *, as_of: date):
+    def build_objective(
+        self, matches: pd.DataFrame, *, as_of: date
+    ) -> tuple[Objective, Gradient, FloatArray]:
         """Return ``(objective, gradient, x0)`` over packed parameters
         ``[base, home_adv, log_r, attack_0..n-1, defence_0..n-1]``."""
         frame = self._clean(matches)
@@ -105,13 +110,14 @@ class NegBinCountsModel:
             return mu_h, mu_a
 
         def _side_ll(k: FloatArray, mu: FloatArray, r: float) -> FloatArray:
-            return (
+            return cast(
+                FloatArray,
                 gammaln(k + r)
                 - gammaln(r)
                 - gammaln(k + 1.0)
                 + r * np.log(r)
                 + k * np.log(mu)
-                - (r + k) * np.log(r + mu)
+                - (r + k) * np.log(r + mu),
             )
 
         def objective(x: FloatArray) -> float:
@@ -131,13 +137,14 @@ class NegBinCountsModel:
             g_eta_a = w * (k_away - mu_a * (r + k_away) / (r + mu_a))
 
             def dll_dr(k: FloatArray, mu: FloatArray) -> FloatArray:
-                return (
+                return cast(
+                    FloatArray,
                     digamma(k + r)
                     - digamma(r)
                     + np.log(r)
                     + 1.0
                     - np.log(r + mu)
-                    - (r + k) / (r + mu)
+                    - (r + k) / (r + mu),
                 )
 
             g_log_r = float((w * (dll_dr(k_home, mu_h) + dll_dr(k_away, mu_a))).sum()) * r
@@ -160,7 +167,7 @@ class NegBinCountsModel:
         x0[1] = 0.1
         x0[2] = np.log(10.0)
         self._teams = teams
-        self.n_train_ = int(len(frame))
+        self.n_train_ = len(frame)
         return objective, gradient, x0
 
     def fit(self, matches: pd.DataFrame, *, as_of: date | None = None) -> Self:
