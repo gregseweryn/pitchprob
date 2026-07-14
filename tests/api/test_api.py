@@ -59,6 +59,66 @@ class TestMatches:
         assert {"date", "home_team", "away_team", "ft_home", "ft_away"} <= set(first)
 
 
+class TestTeams:
+    def test_lists_canonical_names(self, client: TestClient) -> None:
+        response = client.get("/v1/leagues/E0/teams")
+        assert response.status_code == 200
+        teams = response.json()
+        assert "Arsenal" in teams
+        assert teams == sorted(teams)
+
+    def test_unknown_league_is_404(self, client: TestClient) -> None:
+        response = client.get("/v1/leagues/XX/teams")
+        assert response.status_code == 404
+
+
+class TestCoupons:
+    def test_generates_coupons_with_reasons_and_caveat(self, client: TestClient) -> None:
+        response = client.post(
+            "/v1/coupons",
+            json={
+                "tier": "high_risk",
+                "max_legs": 2,
+                "fixtures": [
+                    {"league": "E0", "home_team": "Arsenal", "away_team": "Chelsea"},
+                    {"league": "E0", "home_team": "Liverpool", "away_team": "Everton"},
+                ],
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["tier"] == "high_risk"
+        assert "independen" in payload["caveat"].lower()
+        for coupon in payload["coupons"]:
+            assert 0.20 <= coupon["joint_probability"] <= 0.40
+            for leg in coupon["legs"]:
+                assert leg["reasons"]
+
+    def test_unknown_tier_is_422(self, client: TestClient) -> None:
+        response = client.post(
+            "/v1/coupons",
+            json={"tier": "yolo", "fixtures": [
+                {"league": "E0", "home_team": "Arsenal", "away_team": "Chelsea"}
+            ]},
+        )
+        assert response.status_code == 422
+
+    def test_unknown_team_is_404(self, client: TestClient) -> None:
+        response = client.post(
+            "/v1/coupons",
+            json={"tier": "safe", "fixtures": [
+                {"league": "E0", "home_team": "Atlantis", "away_team": "Chelsea"}
+            ]},
+        )
+        assert response.status_code == 404
+
+
+class TestCors:
+    def test_dashboard_origin_allowed(self, client: TestClient) -> None:
+        response = client.get("/health", headers={"Origin": "http://localhost:3000"})
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
 class TestPredictions:
     def test_full_market_book(self, client: TestClient) -> None:
         response = client.post(

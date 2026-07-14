@@ -11,7 +11,7 @@ benchmarked against the closing line.
 > plainly when the models fall short of it. They usually do; that is the expected result
 > and the reports are designed to show it rather than hide it.
 
-## What works today (M1 core + M2 ML + M3 betting engine)
+## What works today (M1 core + M2 ML + M3 betting engine + M4 dashboard)
 
 - **Data**: 21,589 matches across the top-5 European leagues (EPL, La Liga, Bundesliga,
   Serie A, Ligue 1), seasons 2014/15–2025/26, ingested from football-data.co.uk with
@@ -38,6 +38,11 @@ benchmarked against the closing line.
   generation (safe/balanced/value/high-risk bands) with per-leg machine-generated
   reasoning and an explicit independence caveat, and a fixtures.csv adapter so
   `pitchprob coupon` runs against the live upcoming-matches feed.
+- **M4 dashboard** (`frontend/`, Next.js 15 + TypeScript + Tailwind — ADR 0007):
+  fixture pricing with the full market book (all four models side by side, stack
+  weights, every market family, corners/cards with their caveat), a coupon builder
+  with per-leg reasoning, and the stored backtest history — disclaimers rendered as
+  first-class content. `make web` starts API + dashboard on :8000/:3000.
 - **Evaluation**: walk-forward backtester (its no-lookahead property is itself under
   test), log-loss / Brier / RPS / ECE, reliability tables, and staking simulation
   (flat + compounding Kelly) with closing-line value.
@@ -199,6 +204,6 @@ make test-int    # Postgres integration tests (needs make db-up)
 | **M1 ✓** | Probability core: data, DC/Poisson/Elo, markets, EV, honest backtests, CLI + API |
 | **M2 ✓** | xG (Understat), feature builder, XGBoost, calibration, stacking ensemble, model cache |
 | **M3 ✓** | Vig-aware selection, NegBin corners/cards, risk-tiered coupons with reasons, fixtures feed |
-| M4 | Next.js dashboard |
+| **M4 ✓** | Next.js dashboard: market books, coupon builder, backtest history |
 | M5 | Live-info engine (API-Football) + LLM news intelligence |
 | M6 | Deployment hardening (Docker images, CI/CD) |

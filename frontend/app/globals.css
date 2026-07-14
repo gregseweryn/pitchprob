@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+:root {
+  --bg: oklch(0.985 0.003 91);
+  --surface: oklch(0.965 0.005 91);
+  --line: oklch(0.9 0.008 91);
+  --ink: oklch(0.24 0.012 60);
+  --ink-muted: oklch(0.45 0.015 70);
+  --gold: oklch(0.7 0.13 88);
+  --gold-ink: oklch(0.47 0.11 80);
+  --gold-soft: oklch(0.94 0.035 91);
+  --slate: oklch(0.45 0.07 258);
+  --slate-soft: oklch(0.93 0.02 258);
+  --brick: oklch(0.51 0.13 27);
+  --brick-soft: oklch(0.95 0.02 27);
+  --draw: oklch(0.72 0.012 91);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-gold: var(--gold);
+  --color-gold-ink: var(--gold-ink);
+  --color-gold-soft: var(--gold-soft);
+  --color-slate: var(--slate);
+  --color-slate-soft: var(--slate-soft);
+  --color-brick: var(--brick);
+  --color-brick-soft: var(--brick-soft);
+  --color-draw: var(--draw);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.num {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+@keyframes shimmer {
+  0% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.55;
+  }
+}
+
+.skeleton {
+  animation: shimmer 1.6s ease-in-out infinite;
+  background: var(--surface);
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

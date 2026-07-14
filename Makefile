@@ -35,3 +35,6 @@ migrate:
 
 serve:
 	uv run uvicorn pitchprob.api.main:app --reload
+
+web:
+	bash scripts/dev-servers.sh
