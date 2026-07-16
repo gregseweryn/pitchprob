@@ -262,4 +262,19 @@ make test-int    # Postgres integration tests (needs make db-up)
 | **M3 ✓** | Vig-aware selection, NegBin corners/cards, risk-tiered coupons with reasons, fixtures feed |
 | **M4 ✓** | Next.js dashboard: market books, coupon builder, backtest history |
 | **M5 ✓** | Availability experiment (API-Football free tier): 40.5k injury records, measured verdict below |
-| M6 | Deployment hardening (Docker images, CI/CD) |
+| **M6 ✓** | Two production images + compose stack profile + CI (ADR 0009) |
+
+## Deployment (M6, ADR 0009)
+
+```bash
+make stack-up      # builds Dockerfile.api + frontend/Dockerfile, boots
+                   # db + api + web; API migrates on startup, dashboard on :3000
+make stack-down
+```
+
+Two non-root images (python:3.12-slim/uv and node:22-alpine/Next standalone),
+configuration via environment only, healthcheck-gated startup. Dev flows are
+untouched: `make db-up` still starts just Postgres. CI (GitHub Actions)
+mirrors the local gates exactly — ruff + mypy + full pytest against a
+Postgres service container, eslint + tsc + build, plus both image builds.
+Kubernetes/queues stay out until a measured need exists.

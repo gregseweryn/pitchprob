@@ -1,0 +1,29 @@
+# pitchprob API image (ADR 0009)
+# build:  docker build -f Dockerfile.api -t pitchprob-api .
+# run:    needs PITCHPROB_DATABASE_URL; migrates then serves on :8000
+
+FROM python:3.12-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+COPY src ./src
+COPY README.md ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
+
+FROM python:3.12-slim
+RUN groupadd -r app && useradd -r -g app app
+WORKDIR /app
+COPY --from=builder /app/.venv ./.venv
+COPY src ./src
+COPY alembic.ini ./
+COPY alembic ./alembic
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
+USER app
+EXPOSE 8000
+HEALTHCHECK --interval=15s --timeout=3s --retries=5 CMD \
+    python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+CMD ["sh", "-c", "alembic upgrade head && uvicorn pitchprob.api.main:app --host 0.0.0.0 --port 8000"]

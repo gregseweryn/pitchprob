@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pitchprob
+          POSTGRES_PASSWORD: pitchprob
+          POSTGRES_DB: pitchprob
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U pitchprob"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      PITCHPROB_DATABASE_URL: postgresql+psycopg://pitchprob:pitchprob@localhost:5433/pitchprob
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups --frozen
+      - run: uv run ruff check src tests
+      - run: uv run mypy
+      # full suite: the Postgres service container makes the integration
+      # tests first-class in CI even when laptops skip them
+      - run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx eslint .
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f Dockerfile.api -t pitchprob-api .
+      - run: docker build -t pitchprob-web frontend/

@@ -1,7 +1,15 @@
 /** Typed client for the pitchprob FastAPI read API (single source of truth —
- * the frontend never reimplements model math, ADR 0007). */
+ * the frontend never reimplements model math, ADR 0007).
+ *
+ * URL resolution: on the server, API_URL wins (in the compose stack that is
+ * the internal service address http://api:8000, injected at runtime); in the
+ * browser it falls back to the build-time NEXT_PUBLIC_API_URL or the
+ * published localhost port. */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_URL =
+  (typeof window === "undefined" ? process.env.API_URL : undefined) ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://localhost:8000";
 
 export type League = {
   code: string;

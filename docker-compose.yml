@@ -18,5 +18,40 @@ services:
       timeout: 3s
       retries: 10
 
+  # Full containerized stack (ADR 0009): docker compose --profile stack up -d
+  # Dev flows are untouched — `make db-up` still starts the database alone.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: pitchprob-api
+    container_name: pitchprob-api
+    profiles: ["stack"]
+    restart: unless-stopped
+    environment:
+      PITCHPROB_DATABASE_URL: postgresql+psycopg://pitchprob:pitchprob@db:5432/pitchprob
+      PITCHPROB_LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: frontend
+    image: pitchprob-web
+    container_name: pitchprob-web
+    profiles: ["stack"]
+    restart: unless-stopped
+    environment:
+      # SSR reaches the API over the internal network; browsers use the
+      # published localhost:8000 (client default in lib/api.ts)
+      API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
 volumes:
   pgdata:

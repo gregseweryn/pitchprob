@@ -27,6 +27,13 @@ db-up:
 	@bash scripts/docker-preflight.sh || true
 	docker compose up -d db
 
+stack-up:
+	@bash scripts/docker-preflight.sh || true
+	docker compose --profile stack up -d --build
+
+stack-down:
+	docker compose --profile stack down
+
 db-down:
 	docker compose down
 
