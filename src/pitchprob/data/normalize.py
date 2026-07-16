@@ -117,13 +117,28 @@ def understat_canonical(name: str) -> str:
 #: what token normalization bridges. Extended iteratively from ingestion
 #: reports, exactly like the Understat map.
 _API_FOOTBALL_OVERRIDES: dict[str, str] = {
+    # England
     "Athletic Club": "Athletic Bilbao",
+    "Sheffield Utd": "Sheffield United",
     "Wolves": "Wolverhampton Wanderers",
+    # France
+    "Estac Troyes": "Troyes",
     "Paris Saint Germain": "Paris Saint-Germain",
-    "Borussia Mönchengladbach": "Borussia Monchengladbach",
+    "Stade Brestois 29": "Brest",
+    # Germany
+    "1. FC Heidenheim": "Heidenheim",
     "1.FC Köln": "FC Cologne",
-    "FC Köln": "FC Cologne",
     "Bayern München": "Bayern Munich",
+    "Borussia Mönchengladbach": "Borussia Monchengladbach",
+    "FC Köln": "FC Cologne",
+    "FSV Mainz 05": "Mainz 05",
+    "SC Freiburg": "Freiburg",
+    "SV Darmstadt 98": "Darmstadt",
+    "SV Elversberg": "Elversberg",
+    "VfL BOCHUM": "Bochum",
+    "VfL Bochum": "Bochum",
+    "Vfl Bochum": "Bochum",
+    "VfL Wolfsburg": "Wolfsburg",
 }
 
 

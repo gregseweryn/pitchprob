@@ -163,6 +163,35 @@ demonstrated closing-line value, not post-hoc probability surgery (M5+).
 
 Reproduce with: `... --model ensemble-cal --calibration temperature`.
 
+### M5: the availability experiment (null result, money saved)
+
+The question that gates all further data spend: *do player-availability
+features improve match probabilities?* 40,500 pre-match injury/absence
+records (API-Football free tier, 5 leagues, seasons 2022–24; 99%+ team
+resolution) became `absences_home/away` features with strict coverage
+semantics (0 = covered and none listed, NaN = no coverage). A/B on
+identical data — GBM, E0, walk-forward 2023-08 → 2025-06, 760 predictions,
+only the ablation differing:
+
+| | log-loss | RPS | flat ROI |
+|---|---|---|---|
+| absences active | 0.9639 | 0.19721 | −7.8% |
+| absences ablated | 0.9643 | 0.19719 | −6.3% |
+
+**Null.** Identical to the third decimal; the tiny differences are noise.
+The market already prices team news, and results-based ratings absorb
+absence effects implicitly. Consequences drawn: no API-Football paid
+upgrade (live absence counts can't earn a subscription their historical
+counterpart earns nothing from), and no LLM news-scoring layer (if
+machine-readable absence lists add zero, LLM-scored press conferences — a
+noisier proxy for the same information — start from a weaker position).
+Caveats stated: counts are crude (a star and a reserve weigh the same),
+one league, and possibly post-hoc-edited source lists — which would bias
+*toward* finding value, strengthening the null.
+
+Reproduce with: `uv run pitchprob backtest --league E0 --start 2023-08-01
+--end 2025-06-30 --model gbm --refit-days 28 [--ablate absences]`.
+
 ### M2 results: does the ML layer help? (same protocol, 28-day refits)
 
 | E0 2021–26, closing-odds subset (n=1730) | log-loss | RPS | ECE (home) |
@@ -232,5 +261,5 @@ make test-int    # Postgres integration tests (needs make db-up)
 | **M2 ✓** | xG (Understat), feature builder, XGBoost, calibration, stacking ensemble, model cache |
 | **M3 ✓** | Vig-aware selection, NegBin corners/cards, risk-tiered coupons with reasons, fixtures feed |
 | **M4 ✓** | Next.js dashboard: market books, coupon builder, backtest history |
-| M5 | Live-info engine (API-Football) + LLM news intelligence |
+| **M5 ✓** | Availability experiment (API-Football free tier): 40.5k injury records, measured verdict below |
 | M6 | Deployment hardening (Docker images, CI/CD) |
