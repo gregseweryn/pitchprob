@@ -398,21 +398,36 @@ def backtest(
     calibration: Annotated[
         str, typer.Option(help="ensemble-cal method: isotonic | temperature")
     ] = "isotonic",
+    end: Annotated[
+        str | None, typer.Option(help="Last evaluation date, ISO (bounds A/B windows)")
+    ] = None,
+    ablate: Annotated[
+        str | None, typer.Option(help="NaN a feature family for A/B runs: absences")
+    ] = None,
 ) -> None:
     """Walk-forward backtest vs the margin-removed Pinnacle closing line."""
     if selector not in ("naive", "blended"):
         raise typer.BadParameter(f"unknown selector {selector!r} (naive | blended)")
+    if ablate is not None and ablate != "absences":
+        raise typer.BadParameter(f"unknown ablation {ablate!r} (absences)")
     configure_logging(get_settings().log_level)
     start_date = date.fromisoformat(start)
     factory = _model_factory(model, half_life, calibration)
 
     with session_scope() as session:
         frame = load_matches_frame(
-            session, league_code=None if pool else league, include_stats=True
+            session,
+            league_code=None if pool else league,
+            include_stats=True,
+            end=date.fromisoformat(end) if end else None,
         )
         if frame.empty:
             typer.echo(f"no matches ingested for {league!r}")
             raise typer.Exit(code=1)
+        if ablate == "absences":
+            for column in ("absences_home", "absences_away"):
+                if column in frame.columns:
+                    frame[column] = float("nan")
 
         typer.echo(f"walk-forward backtest: {model} on {league}"
                    f"{' (pooled training)' if pool else ''}, start {start_date}, "

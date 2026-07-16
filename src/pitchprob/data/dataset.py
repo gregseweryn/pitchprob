@@ -4,14 +4,14 @@ Long-format persistence (ADR 0003) is pivoted here into the wide frames that
 models and backtests consume. Team names are canonical.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
-from pitchprob.data.orm import League, Match, OddsQuote, Season, Team
+from pitchprob.data.orm import Injury, League, Match, OddsQuote, Season, Team
 
 MATCH_COLUMNS = ["date", "home_team", "away_team", "ft_home", "ft_away"]
 STATS_COLUMNS = [
@@ -44,9 +44,13 @@ def load_matches_frame(
 ) -> pd.DataFrame:
     """Completed matches, one row each, sorted by date.
 
-    With ``include_stats`` the frame additionally carries the league code and
-    the match statistics the feature builder consumes (shots, shots on target,
-    corners, xG) as floats with NaN for missing values.
+    With ``include_stats`` the frame additionally carries the league code, the
+    match statistics the feature builder consumes (shots, shots on target,
+    corners, xG) as floats with NaN for missing values, and listed absence
+    counts per side (ADR 0008). Absence semantics are strict: ``0`` means the
+    injury corpus covers the date and lists nobody; ``NaN`` means the date is
+    outside coverage entirely — the models must never mistake missing data for
+    a healthy squad.
     """
     home, away = aliased(Team), aliased(Team)
     columns: list[Any] = [
@@ -92,7 +96,48 @@ def load_matches_frame(
     if include_stats:
         for column in _NUMERIC_STATS:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        _attach_absences(session, frame)
     return frame
+
+
+def _attach_absences(session: Session, frame: pd.DataFrame) -> None:
+    """Add ``absences_home``/``absences_away`` (ADR 0008).
+
+    Semantics matter for honesty: ``0`` means "inside the injury-data
+    coverage window and nothing listed"; ``NaN`` means "no coverage for this
+    date" (e.g. seasons before 2022). Coverage is the global date window of
+    ingested injuries — all leagues are collected over the same seasons, so a
+    per-league window would add complexity without changing results. Counts
+    use the same ±1-day tolerance as the xG join.
+    """
+    rows = session.execute(
+        select(Team.canonical_name, Injury.match_date, func.count())
+        .join(Team, Injury.team_id == Team.id)
+        .group_by(Team.canonical_name, Injury.match_date)
+    ).all()
+    if not rows or frame.empty:
+        frame["absences_home"] = float("nan")
+        frame["absences_away"] = float("nan")
+        return
+
+    counts = {(str(name), when): int(n) for name, when, n in rows}
+    dates = [when for _, when, _ in rows]
+    window_low, window_high = min(dates), max(dates)
+    one_day = timedelta(days=1)
+
+    def count_for(team: str, when: date) -> float:
+        if not (window_low - one_day <= when <= window_high + one_day):
+            return float("nan")
+        return float(
+            sum(counts.get((team, when + delta), 0) for delta in (-one_day, timedelta(0), one_day))
+        )
+
+    frame["absences_home"] = [
+        count_for(team, when) for team, when in zip(frame["home_team"], frame["date"], strict=True)
+    ]
+    frame["absences_away"] = [
+        count_for(team, when) for team, when in zip(frame["away_team"], frame["date"], strict=True)
+    ]
 
 
 def load_closing_odds_frame(

@@ -31,12 +31,18 @@ _PER_SIDE = (
     "rest_days", "elo",
 )
 
+#: Pre-match-known columns copied straight from the input row (not derived
+#: from history): listed player absences per side (ADR 0008). NaN when the
+#: injury corpus has no coverage for the date.
+_PASSTHROUGH = ("absences_home", "absences_away")
+
 #: Numeric model inputs, in stable order. League (categorical) and the meta
 #: columns (date, teams) ride along in the frame but are not listed here.
 FEATURE_COLUMNS: list[str] = (
     [f"h_{name}" for name in _PER_SIDE]
     + [f"a_{name}" for name in _PER_SIDE]
     + ["elo_diff"]
+    + list(_PASSTHROUGH)
 )
 
 META_COLUMNS = ["date", "league", "home_team", "away_team"]
@@ -205,6 +211,11 @@ class FeatureBuilder:
                 "home_team": str(row["home_team"]),
                 "away_team": str(row["away_team"]),
             }
+            # pre-match-known passthrough (published absence lists); rows
+            # without the columns land as NaN via the DataFrame constructor
+            for column in _PASSTHROUGH:
+                if column in row:
+                    feature_row[column] = _num(row, column)
             feature_rows.append(feature_row)
             hg, ag = int(row["ft_home"]), int(row["ft_away"])
             outcomes.append(0 if hg > ag else (1 if hg == ag else 2))

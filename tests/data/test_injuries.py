@@ -60,6 +60,37 @@ class TestInjuryRepository:
         assert n == 3
 
 
+class TestAbsenceColumnsInFrame:
+    def test_counts_and_coverage_semantics(self, seeded_session: Session) -> None:
+        from pitchprob.data.dataset import load_matches_frame
+
+        arsenal = TeamRepository.resolve(
+            seeded_session, source="football-data", alias="Arsenal"
+        )
+        # ARSENAL_FOREST is played on 2023-08-12; list two absences, one of
+        # them on the neighbouring day (tolerance must include it)
+        for player, day in (("B. Saka", 12), ("G. Jesus", 13)):
+            InjuryRepository.upsert(
+                seeded_session, team_id=arsenal.id, match_date=date(2023, 8, day),
+                player_name=player, reason=None, season=2023,
+            )
+
+        frame = load_matches_frame(seeded_session, league_code="E0", include_stats=True)
+        assert {"absences_home", "absences_away"} <= set(frame.columns)
+
+        arsenal_row = frame[frame["home_team"] == "Arsenal"].iloc[0]
+        assert arsenal_row["absences_home"] == 2
+        # opponent has no listed absences but IS inside the coverage window
+        assert arsenal_row["absences_away"] == 0
+
+    def test_no_injury_data_at_all_means_nan(self, seeded_session: Session) -> None:
+        from pitchprob.data.dataset import load_matches_frame
+
+        frame = load_matches_frame(seeded_session, league_code="E0", include_stats=True)
+        # no injuries ingested in this fixture -> no coverage -> NaN, not 0
+        assert frame["absences_home"].isna().all()
+
+
 class _FakeClient:
     """Serves canned /injuries payloads keyed by (league, season)."""
 
