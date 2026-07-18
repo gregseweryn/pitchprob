@@ -66,7 +66,7 @@ uv run pitchprob predict --league E0 --home "Manchester City" --away "Chelsea" \
     --odds 1.55,4.4,5.9
 uv run pitchprob backtest --league E0 --start 2021-08-01
 make serve                      # FastAPI on :8000, OpenAPI docs at /docs
-make check                      # ruff + mypy --strict + 137 tests
+make check                      # ruff + mypy --strict + 343 tests
 ```
 
 Example output (real run, July 2026):
@@ -192,6 +192,137 @@ one league, and possibly post-hoc-edited source lists — which would bias
 Reproduce with: `uv run pitchprob backtest --league E0 --start 2023-08-01
 --end 2025-06-30 --model gbm --refit-days 28 [--ablate absences]`.
 
+### M7: the inference engine and true CLV (ADR 0010)
+
+An audit against professional-syndicate practice found that the previously
+reported "CLV" had no timing dimension: both its legs (settlement price and
+fair probability) came from the closing snapshot, so it measured cross-book
+price dispersion at the close, not "did the market move toward our price
+after we bet". Meanwhile ~1M stored odds quotes — opening prices for four
+books across 1X2, OU 2.5 and Asian handicap — were never used.
+
+M7 rebuilt the evaluation loop around them, changing **no model**:
+
+- **Two simulation clocks.** `--at close` reproduces the legacy protocol
+  bit-for-bit (regression-pinned to every published digit above). `--at open`
+  bets the opening snapshot only — opening prices, opening anchor — and
+  measures **true CLV = opening price × Shin(closing fair) − 1**.
+- **The beatable benchmark, measured for the first time**: on the E0 subset
+  (n=1,730) the Pinnacle *opening* line scores log-loss **0.95018** vs the
+  close's 0.94640. Dixon-Coles at 0.97248 (28d refits) is +2.3% behind the
+  open vs +2.7% behind the close. The open is the weaker target, but only by
+  ~0.4pp — no free lunch, and now the right gap is on the record.
+- **OU 2.5 and Asian handicap betting** from the same score matrix, priced at
+  the quoted opening line inside the walk-forward loop; realized settlement
+  (incl. quarter-line split stakes) is property-tested to agree
+  cell-for-cell with the probability-side markets module. AH CLV exists only
+  where the closing line still matches the opening line (~57% of matches on
+  a 2025 E0 sample; coverage is reported, not hidden).
+- **Honest inference, finally**: every staking block now carries
+  block-bootstrap confidence intervals (ISO-week blocks — bets within a
+  round are correlated and IID resampling would flatter them), delivering
+  what ADR 0004 promised. At ~260 bets the ROI interval is ±16pp: printed,
+  not footnoted.
+- **An experiment registry**: `pitchprob experiment run --name …` stores
+  content-hashed runs; `pitchprob experiment compare … --vs key=value` runs
+  a paired A/B on identical fixtures and block-bootstraps Δlog-loss/ΔRPS/
+  ΔROI/ΔCLV — anything that misses the 95% interval is labeled a **null** in
+  the generated report.
+
+#### The first five-league, three-market, true-CLV baseline (and its verdict)
+
+Dixon-Coles, weekly refits, 2021-08 → 2026-05, blended selector (w=0.4, cap
+8.0, EV > 3%) betting 1X2 + OU 2.5 + AH at opening best prices:
+
+| league | preds | model LL | open LL | close LL | bets | ROI (95% CI) | true CLV (95% CI) | p(CLV) |
+|---|---|---|---|---|---|---|---|---|
+| E0 | 1,900 | 0.9755 | 0.9502 | 0.9464 | 2,888 | −3.2% (−8.8, +2.2) | **−0.76%** (−1.12, −0.38) | .0005 |
+| SP1 | 1,900 | 0.9828 | 0.9639 | 0.9630 | 2,644 | −5.3% (−11.5, +1.1) | **−1.28%** (−1.68, −0.86) | .0005 |
+| D1 | 1,530 | 1.0009 | 0.9743 | 0.9712 | 2,107 | −4.4% (−11.1, +2.2) | **−0.78%** (−1.22, −0.31) | .003 |
+| I1 | 1,900 | 0.9900 | 0.9705 | 0.9684 | 2,511 | −5.4% (−11.0, +0.2) | **−1.14%** (−1.60, −0.69) | .001 |
+| F1 | 1,678 | 1.0024 | 0.9822 | 0.9820 | 2,535 | −6.2% (−12.0, −0.6) | **−0.90%** (−1.36, −0.43) | .0005 |
+
+Three honest findings, in decreasing order of comfort:
+
+1. **The beatable target is measured.** The opening line is 0.02pp (F1) to
+   0.4pp (E0) softer than the close in log-loss; the model sits 2.0–2.7%
+   behind the *open*. Ligue 1's line barely sharpens between open and close.
+2. **The old "+1.3% CLV" was line-shopping value, not timing value.** Under
+   the true clock the blended strategy's mean CLV is *significantly negative
+   in every league*: the closing line systematically moves **against** its
+   bets. Where the model disagrees with the opening price, the market's
+   subsequent move sides with the market, on average. Any Phase 2 bet gate
+   must find the minority of divergences the market later confirms — the
+   aggregate says the default selector should not be betting early.
+3. **One number that is *not* a headline:** the naive selector shows +6.3%
+   AH CLV — an artifact suspect, not an edge: it selects best-price (max
+   book) outliers against a Pinnacle fair, on the ~62% of matches whose AH
+   line never moved. Decomposing this is Phase 1 work; it is recorded here
+   so nobody mistakes it for alpha.
+
+Reproduce with: `uv run pitchprob experiment run --name phase0-open-blended-E0
+--league E0 --start 2021-08-01 --at open --markets 1x2,ou,ah --selector blended`
+(runs stored content-hashed in the `backtests` table).
+
+#### The movement study: does the line move toward the model? (a null that teaches)
+
+For every prediction with both books, compare three directions: the market's
+open→close movement `m`, the model's divergence from the open `d`, and the
+realized outcome's direction `t` (all as probability vectors; `m·d > 0`
+means the market moved toward the model). Dixon-Coles, 28-day refits,
+2021-08 → 2026-05:
+
+| league | n | P(close moved toward truth) | P(moved toward model) | mean m·d (95% CI) | largest-divergence bucket |
+|---|---|---|---|---|---|
+| E0 | 1,730 | 0.534 | 0.479 | −0.00014 (−.00032, +.00003) | −0.00055 |
+| SP1 | 1,707 | 0.523 | 0.480 | −0.00010 (−.00028, +.00010) | −0.00033 |
+| D1 | 1,373 | 0.552 | 0.487 | **−0.00032** (−.00055, −.00007, p=.012) | −0.00058 |
+| I1 | 1,717 | 0.535 | 0.469 | −0.00010 (−.00033, +.00017) | +0.00011 |
+| F1 | 1,525 | 0.527 | 0.517 | +0.00007 (−.00017, +.00030) | +0.00034 |
+
+The sanity check passes — the close is sharper than the open everywhere. The
+verdict does not: **model-vs-open divergence is an error signal, not a steam
+signal.** The market does not follow Dixon-Coles anywhere; in Germany it
+significantly moves *against* it, and in E0/SP1/D1 the effect is worst
+exactly where the model disagrees most. This explains the negative true CLV
+above mechanistically, and it sets the honest prior for the meta-gate phase:
+a gate keyed on divergence magnitude alone would point the wrong way; any
+positive-CLV subset must come from *conditional* features (book dispersion,
+price band, league — note France) — or the gate's correct output is "do not
+bet early with this model", which a real-money operation must be able to
+say. Reproduce with: `uv run pitchprob study movement --league E0 --start
+2021-08-01`.
+
+#### Phase 2a: the CLV meta-gate (verdict: no early edge — and one trap disarmed)
+
+A second model (XGBoost regressor, walk-forward, 90-day refits, whitelisted
+bet-time features only) was trained to predict each candidate's **sharp CLV**
+— Pinnacle open price vs Pinnacle close fair, the timing-only label — and to
+bet only candidates predicted above a buffer. Design and prespecified
+endpoints: `docs/superpowers/specs/2026-07-18-phase2-clv-meta-gate.md`.
+
+The paired comparison against the blended baseline looked like a win: "CLV"
+significantly better in 4 of 5 leagues. The primary endpoint says otherwise
+— realized `clv_sharp` of the gated bets:
+
+| league | gated bets | clv_exec (best price) | **clv_sharp** (95% CI) | p |
+|---|---|---|---|---|
+| E0 | 299 | +0.11% | **−1.32%** (−2.43, −0.07) | .037 |
+| SP1 | 304 | +0.74% | +0.17% (−0.73, +1.04) | .70 |
+| D1 | 424 | +1.23% | +0.25% (−0.70, +1.26) | .64 |
+| I1 | 383 | +7.13% | −0.66% (−1.53, +0.20) | .15 |
+| F1 | 201 | +0.96% | −0.67% (−1.56, +0.17) | .14 |
+
+Pooled ≈ −0.4%. The gate concentrated 60–75% of its bets in Asian handicap,
+where the best-vs-sharp price spread is widest — Serie A's +7.1% "CLV" at
+best prices collapses to −0.66% against the sharp book. **The apparent
+improvement is line-shopping value, not timing edge**, exactly the artifact
+the two-label design existed to catch. Prespecified conclusion, published as
+written: *no early timing edge with current models; the betting
+recommendation remains bet-at-kickoff with line shopping; real-money betting
+stays locked.* Every backtest now reports `clv_sharp` alongside `clv_exec`
+for every selector so this misreading cannot recur (ADR 0011).
+
 ### M2 results: does the ML layer help? (same protocol, 28-day refits)
 
 | E0 2021–26, closing-odds subset (n=1730) | log-loss | RPS | ECE (home) |
@@ -228,25 +359,29 @@ src/pitchprob/
 │                 + dataset.py read-models (DB → training frames)
 ├── markets/      pure functions: score matrix → every goals market   (ADR 0002)
 ├── models/       Dixon-Coles, Poisson, Elo (+ JSON param round-trips)
-├── betting/      odds math (Shin/multiplicative de-margin), EV, Kelly
-├── evaluation/   walk-forward backtester, metrics, staking simulation (ADR 0004)
-├── services/     market-book construction (shared by CLI + API)
+├── betting/      odds math (Shin/multiplicative de-margin), EV, Kelly,
+│                 realized settlement (1X2/OU/AH incl. quarter lines)
+├── evaluation/   walk-forward backtester, metrics, staking simulation,
+│                 block-bootstrap significance (ADR 0004, ADR 0010)
+├── services/     market-book construction, backtest harness (two clocks:
+│                 close/open), experiment registry + paired comparison
 ├── api/          FastAPI read API
 └── cli/          Typer commands
 ```
 
 Postgres 16 is the system of record (long-format odds/predictions, ADR 0003) with
 Alembic migrations; the code is dialect-portable and runs unmodified on SQLite for
-zero-dependency development. See `docs/adr/` for the four architecture decision
+zero-dependency development. See `docs/adr/` for the ten architecture decision
 records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing
 
-137 tests: hand-computed reference values for every formula, hypothesis property tests
+343 tests: hand-computed reference values for every formula, hypothesis property tests
 (market partitions sum to 1, quarter-line AH EV ≡ mean of adjacent half lines, Shin
-books renormalize), analytic-vs-numeric gradient checks, synthetic-data parameter
-recovery, a no-lookahead proof for the backtester, and offline CLI/API integration
-tests. `mypy --strict` and `ruff` clean.
+books renormalize, realized settlement ≡ the probability-side markets module
+cell-for-cell, block-bootstrap scale equivariance), analytic-vs-numeric gradient
+checks, synthetic-data parameter recovery, a no-lookahead proof for the backtester,
+and offline CLI/API integration tests. `mypy --strict` and `ruff` clean.
 
 ```bash
 make test        # unit tests (no DB needed)
@@ -263,6 +398,7 @@ make test-int    # Postgres integration tests (needs make db-up)
 | **M4 ✓** | Next.js dashboard: market books, coupon builder, backtest history |
 | **M5 ✓** | Availability experiment (API-Football free tier): 40.5k injury records, measured verdict below |
 | **M6 ✓** | Two production images + compose stack profile + CI (ADR 0009) |
+| **M7 ✓** | Inference engine: true CLV at the open, OU/AH betting, block-bootstrap CIs, experiment registry (ADR 0010) |
 
 ## Deployment (M6, ADR 0009)
 

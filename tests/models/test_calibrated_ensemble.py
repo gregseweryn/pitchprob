@@ -98,9 +98,9 @@ class TestValidation:
             model.match_probabilities("A", "B")
 
 
-class TestCliFactory:
+class TestHarnessFactory:
     def test_ensemble_cal_is_a_known_model(self) -> None:
-        from pitchprob.cli.main import _model_factory
+        from pitchprob.services.harness import build_model_factory
 
-        factory = _model_factory("ensemble-cal", 390.0)
+        factory = build_model_factory("ensemble-cal", 390.0)
         assert isinstance(factory(), CalibratedEnsembleModel)

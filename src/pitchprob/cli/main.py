@@ -6,33 +6,28 @@ seam that tests replace with an offline fake.
 
 import json as json_lib
 from datetime import UTC, date, datetime
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 import httpx
-import numpy as np
 import typer
 
-from pitchprob.betting.odds_math import remove_overround_shin
-from pitchprob.betting.selection import select_value_bets
 from pitchprob.core.config import get_settings
 from pitchprob.core.db import session_scope
 from pitchprob.core.errors import PitchprobError
 from pitchprob.core.logging import configure_logging
-from pitchprob.data.dataset import load_closing_odds_frame, load_matches_frame
+from pitchprob.data.dataset import load_matches_frame
 from pitchprob.data.orm import Backtest, ModelRun
 from pitchprob.data.service import LEAGUES, Downloader, HttpDownloader, IngestionService
-from pitchprob.evaluation.backtest import run_backtest
-from pitchprob.evaluation.metrics import (
-    brier_score,
-    expected_calibration_error,
-    log_loss,
-    ranked_probability_score,
-)
-from pitchprob.evaluation.staking import simulate_staking
-from pitchprob.models.dixon_coles import DixonColesModel, IndependentPoissonModel
+from pitchprob.models.dixon_coles import DixonColesModel
 from pitchprob.models.elo import EloModel
-from pitchprob.models.ensemble import EnsembleModel
-from pitchprob.models.gbm import GbmModel
+from pitchprob.services.experiments import (
+    apply_overrides,
+    compare_experiments,
+    config_hash,
+    run_experiment,
+)
+from pitchprob.services.harness import HarnessConfig, NoDataError, run_harness
+from pitchprob.services.movement_study import run_movement_study
 from pitchprob.services.prediction import DEFAULT_HALF_LIFE_DAYS, build_market_book
 
 app = typer.Typer(
@@ -345,38 +340,13 @@ def coupon(
     typer.echo(f"\n{INDEPENDENCE_CAVEAT}")
 
 
-def _model_factory(name: str, half_life: float, calibration: str = "isotonic") -> Any:
-    key = name.replace("_", "-").lower()
-    if key == "dixon-coles":
-        return lambda: DixonColesModel(half_life_days=half_life)
-    if key == "poisson":
-        return lambda: IndependentPoissonModel(half_life_days=half_life)
-    if key == "elo":
-        return lambda: EloModel()
-    if key == "gbm":
-        return lambda: GbmModel()
-    if key == "ensemble":
-        return lambda: EnsembleModel(half_life_days=half_life)
-    if key == "ensemble-cal":
-        from pitchprob.models.calibrated import CalibratedEnsembleModel
-
-        if calibration not in ("isotonic", "temperature"):
-            raise typer.BadParameter(f"unknown calibration {calibration!r}")
-        return lambda: CalibratedEnsembleModel(
-            half_life_days=half_life,
-            method=cast(Any, calibration),
-        )
-    raise typer.BadParameter(
-        f"unknown model {name!r} "
-        "(dixon-coles | poisson | elo | gbm | ensemble | ensemble-cal)"
-    )
-
-
 @app.command()
 def backtest(
-    league: Annotated[str, typer.Option(help="League code")] = "E0",
+    league: Annotated[str, typer.Option(help="League code, or 'all'")] = "E0",
     start: Annotated[str, typer.Option(help="First prediction date, ISO")] = "2021-08-01",
-    model: Annotated[str, typer.Option(help="dixon-coles | poisson | elo")] = "dixon-coles",
+    model: Annotated[
+        str, typer.Option(help="dixon-coles | poisson | elo | gbm | ensemble | ensemble-cal")
+    ] = "dixon-coles",
     refit_days: Annotated[int, typer.Option(help="Refit cadence, days")] = 7,
     min_train_matches: Annotated[int, typer.Option(help="Training-history gate")] = 380,
     half_life: Annotated[float, typer.Option(help="Time-decay half-life, days")] = (
@@ -404,138 +374,47 @@ def backtest(
     ablate: Annotated[
         str | None, typer.Option(help="NaN a feature family for A/B runs: absences")
     ] = None,
+    at: Annotated[
+        str, typer.Option(help="Snapshot to bet at: close (legacy kickoff sim) "
+                               "| open (true CLV vs the close, ADR 0010)")
+    ] = "close",
+    markets: Annotated[
+        str, typer.Option(help="Comma list of markets to bet: 1x2,ou,ah "
+                               "(auxiliary markets need --at open)")
+    ] = "1x2",
 ) -> None:
     """Walk-forward backtest vs the margin-removed Pinnacle closing line."""
-    if selector not in ("naive", "blended"):
-        raise typer.BadParameter(f"unknown selector {selector!r} (naive | blended)")
-    if ablate is not None and ablate != "absences":
-        raise typer.BadParameter(f"unknown ablation {ablate!r} (absences)")
     configure_logging(get_settings().log_level)
-    start_date = date.fromisoformat(start)
-    factory = _model_factory(model, half_life, calibration)
+    config = HarnessConfig(
+        start=date.fromisoformat(start),
+        league=league,
+        model=model,
+        refit_days=refit_days,
+        min_train_matches=min_train_matches,
+        half_life=half_life,
+        ev_threshold=ev_threshold,
+        pool=pool,
+        selector=selector,
+        blend_weight=blend_weight,
+        max_price=max_price,
+        calibration=calibration,
+        end=date.fromisoformat(end) if end else None,
+        ablate=ablate,
+        at=at,
+        markets=tuple(m.strip() for m in markets.split(",") if m.strip()),
+    )
+    typer.echo(f"walk-forward backtest: {model} on {league}"
+               f"{' (pooled training)' if pool else ''}, start {config.start}, "
+               f"refit every {refit_days}d, at {at}, markets {','.join(config.markets)}")
 
     with session_scope() as session:
-        frame = load_matches_frame(
-            session,
-            league_code=None if pool else league,
-            include_stats=True,
-            end=date.fromisoformat(end) if end else None,
-        )
-        if frame.empty:
-            typer.echo(f"no matches ingested for {league!r}")
-            raise typer.Exit(code=1)
-        if ablate == "absences":
-            for column in ("absences_home", "absences_away"):
-                if column in frame.columns:
-                    frame[column] = float("nan")
-
-        typer.echo(f"walk-forward backtest: {model} on {league}"
-                   f"{' (pooled training)' if pool else ''}, start {start_date}, "
-                   f"refit every {refit_days}d")
-        preds = run_backtest(
-            frame,
-            model_factory=factory,
-            start=start_date,
-            refit_every_days=refit_days,
-            min_train_matches=min_train_matches,
-            predict_only={"league": league} if pool else None,
-        )
-        if preds.empty:
-            typer.echo("no predictions generated (check --start and training history)")
-            raise typer.Exit(code=1)
-
-        probs = preds[["p_home", "p_draw", "p_away"]].to_numpy(dtype=np.float64)
-        outcomes = preds["outcome"].to_numpy(dtype=np.int64)
-        per_class_ece = {
-            f"ece_{name}": expected_calibration_error(
-                (outcomes == index).astype(np.int64), probs[:, index]
-            )
-            for index, name in enumerate(("home", "draw", "away"))
-        }
-        metrics: dict[str, Any] = {
-            "n_predictions": len(preds),
-            "model": {
-                "log_loss": log_loss(outcomes, probs),
-                "brier": brier_score(outcomes, probs),
-                "rps": ranked_probability_score(outcomes, probs),
-                **per_class_ece,
-            },
-        }
-
-        closing = load_closing_odds_frame(session, league_code=league, bookmaker="pinnacle")
-        joined = preds.merge(closing, on=["date", "home_team", "away_team"], how="inner")
-        if len(joined) > 0:
-            closing_prices = joined[["price_home", "price_draw", "price_away"]].to_numpy(
-                dtype=np.float64
-            )
-            shin = np.array([remove_overround_shin(list(p)) for p in closing_prices])
-            joint_outcomes = joined["outcome"].to_numpy(dtype=np.int64)
-            joint_probs = joined[["p_home", "p_draw", "p_away"]].to_numpy(dtype=np.float64)
-            metrics["benchmark_subset"] = {
-                "n": len(joined),
-                "model_log_loss": log_loss(joint_outcomes, joint_probs),
-                "model_rps": ranked_probability_score(joint_outcomes, joint_probs),
-                "closing_log_loss": log_loss(joint_outcomes, shin),
-                "closing_rps": ranked_probability_score(joint_outcomes, shin),
-            }
-
-            best = load_closing_odds_frame(
-                session, league_code=league, bookmaker="market_max"
-            )
-            price_source = best if len(best) else closing
-            bets = joined.merge(
-                price_source,
-                on=["date", "home_team", "away_team"],
-                how="inner",
-                suffixes=("", "_best"),
-            )
-            candidates = []
-            price_cols = {"home": "price_home", "draw": "price_draw", "away": "price_away"}
-            if "price_home_best" in bets.columns:
-                price_cols = {k: f"{v}_best" for k, v in price_cols.items()}
-            for i, raw_row in enumerate(bets.itertuples(index=False)):
-                row = cast(Any, raw_row)  # pandas named tuples are untyped
-                for sel_idx, selection in enumerate(("home", "draw", "away")):
-                    candidates.append(
-                        {
-                            "date": row.date,
-                            "probability": float(
-                                getattr(row, ("p_home", "p_draw", "p_away")[sel_idx])
-                            ),
-                            "market_probability": float(shin[i, sel_idx]),
-                            "price": float(getattr(row, price_cols[selection])),
-                            "won": int(row.outcome) == sel_idx,
-                            "closing_probability": float(shin[i, sel_idx]),
-                        }
-                    )
-            import pandas as pd
-
-            candidate_frame = pd.DataFrame(candidates)
-            if selector == "blended":
-                selected = select_value_bets(
-                    candidate_frame,
-                    blend_weight=blend_weight,
-                    ev_threshold=ev_threshold,
-                    max_price=max_price,
-                )
-                # bets are pre-qualified on blended EV; settle them all at
-                # the anchored probability
-                sim_frame = selected.assign(probability=selected["p_bet"])
-                staking = simulate_staking(sim_frame, strategy="flat", ev_threshold=-1.0)
-            else:
-                staking = simulate_staking(
-                    candidate_frame, strategy="flat", ev_threshold=ev_threshold
-                )
-            metrics["staking_flat"] = {
-                "selector": selector,
-                "n_bets": staking.n_bets,
-                "roi": staking.roi,
-                "profit_units": staking.profit,
-                "hit_rate": staking.hit_rate,
-                "max_drawdown": staking.max_drawdown,
-                "mean_clv": staking.mean_clv,
-            }
-
+        try:
+            result = run_harness(session, config)
+        except NoDataError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1) from exc
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         session.add(
             Backtest(
                 created_at=datetime.now(tz=UTC),
@@ -546,16 +425,206 @@ def backtest(
                     "refit_days": refit_days,
                     "half_life": half_life,
                     "ev_threshold": ev_threshold,
+                    "selector": selector,
+                    "at": at,
+                    "markets": list(config.markets),
+                    "pool": pool,
+                    "blend_weight": blend_weight,
+                    "max_price": max_price,
+                    "end": end,
+                    "ablate": ablate,
                 },
-                metrics=metrics,
+                metrics=result.metrics,
             )
         )
 
-    typer.echo(json_lib.dumps(metrics, indent=2))
+    typer.echo(json_lib.dumps(result.metrics, indent=2))
     typer.echo(
         "\nNote: closing-line metrics are the benchmark to approach; beating them "
         "consistently is unlikely (see ADR 0004)."
     )
+
+
+experiment_app = typer.Typer(
+    no_args_is_help=True,
+    help="Run and compare backtest experiments with paired significance (ADR 0010).",
+)
+app.add_typer(experiment_app, name="experiment")
+
+
+def _experiment_config(
+    league: str, start: str, model: str, refit_days: int, min_train_matches: int,
+    half_life: float, ev_threshold: float, pool: bool, selector: str,
+    blend_weight: float, max_price: float, calibration: str, end: str | None,
+    ablate: str | None, at: str, markets: str,
+) -> HarnessConfig:
+    return HarnessConfig(
+        start=date.fromisoformat(start),
+        league=league,
+        model=model,
+        refit_days=refit_days,
+        min_train_matches=min_train_matches,
+        half_life=half_life,
+        ev_threshold=ev_threshold,
+        pool=pool,
+        selector=selector,
+        blend_weight=blend_weight,
+        max_price=max_price,
+        calibration=calibration,
+        end=date.fromisoformat(end) if end else None,
+        ablate=ablate,
+        at=at,
+        markets=tuple(m.strip() for m in markets.split(",") if m.strip()),
+    )
+
+
+@experiment_app.command("run")
+def experiment_run(
+    name: Annotated[str, typer.Option(help="Experiment name for the registry")],
+    league: Annotated[str, typer.Option(help="League code, or 'all'")] = "E0",
+    start: Annotated[str, typer.Option(help="First prediction date, ISO")] = "2021-08-01",
+    model: Annotated[str, typer.Option(help="Model name (see backtest)")] = "dixon-coles",
+    refit_days: Annotated[int, typer.Option(help="Refit cadence, days")] = 7,
+    min_train_matches: Annotated[int, typer.Option(help="Training-history gate")] = 380,
+    half_life: Annotated[float, typer.Option(help="Time-decay half-life, days")] = (
+        DEFAULT_HALF_LIFE_DAYS
+    ),
+    ev_threshold: Annotated[float, typer.Option(help="Min EV to place a bet")] = 0.03,
+    pool: Annotated[bool, typer.Option("--pool", help="Pooled training")] = False,
+    selector: Annotated[str, typer.Option(help="naive | blended")] = "naive",
+    blend_weight: Annotated[float, typer.Option(help="Model share in blend")] = 0.4,
+    max_price: Annotated[float, typer.Option(help="Hard price cap")] = 8.0,
+    calibration: Annotated[str, typer.Option(help="isotonic | temperature")] = "isotonic",
+    end: Annotated[str | None, typer.Option(help="Last evaluation date, ISO")] = None,
+    ablate: Annotated[str | None, typer.Option(help="Feature family to NaN")] = None,
+    at: Annotated[str, typer.Option(help="close | open")] = "close",
+    markets: Annotated[str, typer.Option(help="Comma list: 1x2,ou,ah")] = "1x2",
+) -> None:
+    """Run one configuration and store it as a named, content-hashed row."""
+    configure_logging(get_settings().log_level)
+    config = _experiment_config(
+        league, start, model, refit_days, min_train_matches, half_life,
+        ev_threshold, pool, selector, blend_weight, max_price, calibration,
+        end, ablate, at, markets,
+    )
+    with session_scope() as session:
+        try:
+            run_id, metrics = run_experiment(session, config, name=name)
+        except NoDataError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1) from exc
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json_lib.dumps(metrics, indent=2))
+    typer.echo(f"\nstored as experiment run #{run_id} "
+               f"(name {name!r}, hash {config_hash(config)})")
+
+
+@experiment_app.command("compare")
+def experiment_compare(
+    vs: Annotated[
+        list[str],
+        typer.Option(
+            "--vs",
+            help="key=value override defining the B side (repeatable), "
+                 "e.g. --vs ablate=absences --vs refit-days=28",
+        ),
+    ],
+    league: Annotated[str, typer.Option(help="League code, or 'all'")] = "E0",
+    start: Annotated[str, typer.Option(help="First prediction date, ISO")] = "2021-08-01",
+    model: Annotated[str, typer.Option(help="Model name (see backtest)")] = "dixon-coles",
+    refit_days: Annotated[int, typer.Option(help="Refit cadence, days")] = 7,
+    min_train_matches: Annotated[int, typer.Option(help="Training-history gate")] = 380,
+    half_life: Annotated[float, typer.Option(help="Time-decay half-life, days")] = (
+        DEFAULT_HALF_LIFE_DAYS
+    ),
+    ev_threshold: Annotated[float, typer.Option(help="Min EV to place a bet")] = 0.03,
+    pool: Annotated[bool, typer.Option("--pool", help="Pooled training")] = False,
+    selector: Annotated[str, typer.Option(help="naive | blended")] = "naive",
+    blend_weight: Annotated[float, typer.Option(help="Model share in blend")] = 0.4,
+    max_price: Annotated[float, typer.Option(help="Hard price cap")] = 8.0,
+    calibration: Annotated[str, typer.Option(help="isotonic | temperature")] = "isotonic",
+    end: Annotated[str | None, typer.Option(help="Last evaluation date, ISO")] = None,
+    ablate: Annotated[str | None, typer.Option(help="Feature family to NaN")] = None,
+    at: Annotated[str, typer.Option(help="close | open")] = "close",
+    markets: Annotated[str, typer.Option(help="Comma list: 1x2,ou,ah")] = "1x2",
+    n_boot: Annotated[int, typer.Option(help="Bootstrap resamples")] = 5000,
+) -> None:
+    """Paired A/B comparison: flags define A, --vs overrides define B."""
+    configure_logging(get_settings().log_level)
+    config_a = _experiment_config(
+        league, start, model, refit_days, min_train_matches, half_life,
+        ev_threshold, pool, selector, blend_weight, max_price, calibration,
+        end, ablate, at, markets,
+    )
+    with session_scope() as session:
+        try:
+            config_b = apply_overrides(config_a, vs)
+            result = compare_experiments(
+                session, config_a, config_b, n_boot=n_boot, store=True
+            )
+        except NoDataError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1) from exc
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    typer.echo(result.report)
+
+
+study_app = typer.Typer(
+    no_args_is_help=True,
+    help="Market-information studies (Phase 1 of the ADR 0010 program).",
+)
+app.add_typer(study_app, name="study")
+
+
+@study_app.command("movement")
+def study_movement(
+    league: Annotated[str, typer.Option(help="League code")] = "E0",
+    start: Annotated[str, typer.Option(help="First prediction date, ISO")] = "2021-08-01",
+    model: Annotated[str, typer.Option(help="Model name (see backtest)")] = "dixon-coles",
+    refit_days: Annotated[int, typer.Option(help="Refit cadence, days")] = 28,
+    min_train_matches: Annotated[int, typer.Option(help="Training-history gate")] = 380,
+    half_life: Annotated[float, typer.Option(help="Time-decay half-life, days")] = (
+        DEFAULT_HALF_LIFE_DAYS
+    ),
+    end: Annotated[str | None, typer.Option(help="Last evaluation date, ISO")] = None,
+    buckets: Annotated[int, typer.Option(help="Divergence quantile buckets")] = 5,
+) -> None:
+    """Does the open→close move side with the model where it disagrees?"""
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        try:
+            result = run_movement_study(
+                session,
+                league=league,
+                start=date.fromisoformat(start),
+                end=date.fromisoformat(end) if end else None,
+                model=model,
+                refit_days=refit_days,
+                min_train_matches=min_train_matches,
+                half_life=half_life,
+                n_buckets=buckets,
+            )
+        except NoDataError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1) from exc
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        session.add(
+            Backtest(
+                created_at=datetime.now(tz=UTC),
+                config={
+                    "study": "movement",
+                    "league": league,
+                    "model": model,
+                    "start": start,
+                    "refit_days": refit_days,
+                },
+                metrics=result.metrics,
+            )
+        )
+    typer.echo(result.report)
 
 
 def main() -> None:
