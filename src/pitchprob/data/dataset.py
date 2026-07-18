@@ -33,6 +33,18 @@ ODDS_COLUMNS = ["date", "home_team", "away_team", "price_home", "price_draw", "p
 
 _NUMERIC_STATS = [c for c in STATS_COLUMNS if c != "league"]
 
+#: Selections that make one complete book per market; a row missing any of
+#: them is an incomplete book and is dropped rather than surfaced as NaN.
+_MARKET_SELECTIONS: dict[str, tuple[str, ...]] = {
+    "1x2": ("home", "draw", "away"),
+    "ou": ("over", "under"),
+    "ah": ("home", "away"),
+}
+
+#: Line markets carry the line in the output; 1X2 stores a constant 0 line
+#: (schema sentinel, ADR 0003) which would only add noise downstream.
+_LINE_MARKETS = ("ou", "ah")
+
 
 def load_matches_frame(
     session: Session,
@@ -138,6 +150,87 @@ def _attach_absences(session: Session, frame: pd.DataFrame) -> None:
     frame["absences_away"] = [
         count_for(team, when) for team, when in zip(frame["away_team"], frame["date"], strict=True)
     ]
+
+
+def load_odds_snapshot_frame(
+    session: Session,
+    *,
+    league_code: str | None = None,
+    bookmaker: str = "pinnacle",
+    market: str = "1x2",
+    closing: bool = True,
+) -> pd.DataFrame:
+    """One snapshot of one bookmaker's book for one market, pivoted wide
+    (ADR 0010): one row per match — and per line for line markets, since the
+    Asian-handicap line can move between the opening and closing snapshots.
+
+    ``line`` stays ``Decimal``: settlement arithmetic must be exact, and every
+    stored line is a multiple of 0.25 so the value round-trips losslessly.
+    Incomplete books (a selection missing from the snapshot) are dropped —
+    they cannot be de-margined and would poison downstream Shin removal.
+    """
+    if market not in _MARKET_SELECTIONS:
+        known = ", ".join(sorted(_MARKET_SELECTIONS))
+        raise ValueError(f"unknown market {market!r} (known: {known})")
+    selections = _MARKET_SELECTIONS[market]
+    price_columns = [
+        f"price_{selection}" for selection in selections
+    ]
+    keep_line = market in _LINE_MARKETS
+    output_columns = (
+        ["match_id", "date", "home_team", "away_team"]
+        + (["line"] if keep_line else [])
+        + price_columns
+    )
+
+    home, away = aliased(Team), aliased(Team)
+    stmt = (
+        select(
+            Match.id.label("match_id"),
+            Match.match_date.label("date"),
+            home.canonical_name.label("home_team"),
+            away.canonical_name.label("away_team"),
+            OddsQuote.line,
+            OddsQuote.selection,
+            OddsQuote.price,
+        )
+        .join(home, Match.home_team_id == home.id)
+        .join(away, Match.away_team_id == away.id)
+        .join(Season, Match.season_id == Season.id)
+        .join(League, Season.league_id == League.id)
+        .join(OddsQuote, OddsQuote.match_id == Match.id)
+        .where(
+            OddsQuote.bookmaker == bookmaker,
+            OddsQuote.market == market,
+            OddsQuote.is_closing.is_(closing),
+        )
+    )
+    if league_code is not None:
+        stmt = stmt.where(League.code == league_code)
+    rows = session.execute(stmt).all()
+    if not rows:
+        return pd.DataFrame(columns=output_columns)
+
+    long = pd.DataFrame(
+        rows,
+        columns=["match_id", "date", "home_team", "away_team", "line", "selection", "price"],
+    )
+    long["price"] = long["price"].astype(float)
+    wide = long.pivot_table(
+        index=["match_id", "date", "home_team", "away_team", "line"],
+        columns="selection",
+        values="price",
+        aggfunc="first",
+    ).reset_index()
+    wide = wide.rename(
+        columns={selection: f"price_{selection}" for selection in selections}
+    )
+    for column in price_columns:
+        if column not in wide.columns:
+            wide[column] = float("nan")
+    wide = wide.dropna(subset=price_columns)
+    wide = wide.sort_values("date", kind="stable").reset_index(drop=True)
+    return wide[output_columns]
 
 
 def load_closing_odds_frame(

@@ -12,10 +12,21 @@ from pitchprob.evaluation.metrics import (
     ranked_probability_score,
     reliability_table,
 )
+from pitchprob.evaluation.significance import (
+    BootstrapSummary,
+    block_bootstrap_mean,
+    block_bootstrap_ratio,
+    block_bootstrap_ratio_delta,
+    week_block_labels,
+)
 from pitchprob.evaluation.staking import StakingResult, simulate_staking
 
 __all__ = [
+    "BootstrapSummary",
     "StakingResult",
+    "block_bootstrap_mean",
+    "block_bootstrap_ratio",
+    "block_bootstrap_ratio_delta",
     "brier_score",
     "expected_calibration_error",
     "log_loss",
@@ -23,4 +34,5 @@ __all__ = [
     "reliability_table",
     "run_backtest",
     "simulate_staking",
+    "week_block_labels",
 ]

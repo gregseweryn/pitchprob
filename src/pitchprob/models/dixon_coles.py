@@ -45,6 +45,10 @@ Gradient = Callable[[FloatArray], FloatArray]
 
 _TAU_FLOOR = 1e-10
 
+#: The application-wide time-decay default (ADR 0010 unified this: the model
+#: previously defaulted to 365 while every caller passed 390 — one number now).
+DEFAULT_HALF_LIFE_DAYS = 390.0
+
 
 def time_decay_weights(
     dates: "pd.Series[Any]", *, as_of: date, half_life_days: float | None
@@ -69,7 +73,7 @@ class DixonColesModel:
     def __init__(
         self,
         *,
-        half_life_days: float | None = 365.0,
+        half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS,
         l2: float = 1e-3,
         max_goals: int = 10,
         fixed_rho: float | None = None,
@@ -284,7 +288,7 @@ class IndependentPoissonModel(DixonColesModel):
     def __init__(
         self,
         *,
-        half_life_days: float | None = 365.0,
+        half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS,
         l2: float = 1e-3,
         max_goals: int = 10,
     ) -> None:

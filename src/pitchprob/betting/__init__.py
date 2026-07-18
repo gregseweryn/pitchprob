@@ -7,6 +7,11 @@ from pitchprob.betting.odds_math import (
     remove_overround_multiplicative,
     remove_overround_shin,
 )
+from pitchprob.betting.settlement import (
+    settle_1x2,
+    settle_asian_handicap,
+    settle_totals,
+)
 from pitchprob.betting.staking import expected_value, kelly_fraction
 
 __all__ = [
@@ -17,4 +22,7 @@ __all__ = [
     "overround",
     "remove_overround_multiplicative",
     "remove_overround_shin",
+    "settle_1x2",
+    "settle_asian_handicap",
+    "settle_totals",
 ]

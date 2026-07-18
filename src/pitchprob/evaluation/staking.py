@@ -6,7 +6,11 @@ profit projection.
 
 Input frame columns: ``date``, ``probability`` (model), ``price`` (decimal
 odds actually available), ``won`` (bool settlement), optionally
-``closing_probability`` (de-margined closing probability for CLV).
+``closing_probability`` (de-margined closing probability for CLV) and
+``gross_return`` (gross return per unit stake from ``betting.settlement``;
+overrides ``won`` where present — Asian handicap and totals settle with
+pushes and half-wins a boolean cannot express, ADR 0010). A push counts as a
+bet but not as a hit.
 """
 
 import math
@@ -30,6 +34,9 @@ class StakingResult:
     max_drawdown: float
     final_bankroll: float
     mean_clv: float | None
+    #: One row per settled bet (input columns + ``stake``, ``pnl``, ``clv``),
+    #: backing block-bootstrap confidence intervals and error analysis.
+    bet_log: pd.DataFrame | None = None
 
 
 def simulate_staking(
@@ -48,6 +55,7 @@ def simulate_staking(
     total_staked = 0.0
     profit = 0.0
     clv_values: list[float] = []
+    bet_records: list[dict[str, Any]] = []
     curve_peak = 0.0 if strategy == "flat" else initial_bankroll
     max_drawdown = 0.0
 
@@ -71,15 +79,23 @@ def simulate_staking(
 
         n_bets += 1
         total_staked += stake
-        won = bool(row.won)
-        pnl = stake * (price - 1.0) if won else -stake
+        gross = getattr(row, "gross_return", None)
+        if gross is not None and not (isinstance(gross, float) and math.isnan(gross)):
+            pnl = stake * (float(gross) - 1.0)
+            won = float(gross) > 1.0
+        else:
+            won = bool(row.won)
+            pnl = stake * (price - 1.0) if won else -stake
         profit += pnl
         bankroll += pnl
         wins += int(won)
 
         closing = getattr(row, "closing_probability", None)
+        clv = float("nan")
         if closing is not None and not (isinstance(closing, float) and math.isnan(closing)):
-            clv_values.append(price * float(closing) - 1.0)
+            clv = price * float(closing) - 1.0
+            clv_values.append(clv)
+        bet_records.append({**row._asdict(), "stake": stake, "pnl": pnl, "clv": clv})
 
         level = profit if strategy == "flat" else bankroll
         curve_peak = max(curve_peak, level)
@@ -94,4 +110,5 @@ def simulate_staking(
         max_drawdown=max_drawdown,
         final_bankroll=bankroll,
         mean_clv=(sum(clv_values) / len(clv_values)) if clv_values else None,
+        bet_log=pd.DataFrame(bet_records),
     )

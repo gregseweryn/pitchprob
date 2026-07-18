@@ -25,6 +25,11 @@ class _Fittable(Protocol):
 #: itertuple with at least .date, .home_team, .away_team.
 PredictFn = Callable[[Any, Any], OutcomeProbabilities]
 
+#: (fitted model, prediction row) -> extra per-match outputs merged into the
+#: predictions frame (e.g. auxiliary-market probabilities priced at quoted
+#: lines). Rows the hook does not cover get NaN in the extra columns.
+ExtraPredictFn = Callable[[Any, Any], Mapping[str, float]]
+
 #: Input columns forwarded into the predictions frame when present.
 _PASSTHROUGH_COLUMNS = ("league",)
 
@@ -69,6 +74,7 @@ def run_backtest(
     min_train_matches: int = 380,
     predict: PredictFn | None = None,
     predict_only: Mapping[str, Any] | None = None,
+    extra_predict: ExtraPredictFn | None = None,
 ) -> pd.DataFrame:
     """Return one row per out-of-sample prediction with columns
     ``date, home_team, away_team, ft_home, ft_away, p_home, p_draw, p_away,
@@ -88,6 +94,7 @@ def run_backtest(
     passthrough = [c for c in _PASSTHROUGH_COLUMNS if c in frame.columns]
 
     records: list[dict[str, Any]] = []
+    extra_columns: dict[str, None] = {}
     window_start = start
     while window_start <= last_date:
         window = _Window(window_start, window_start + timedelta(days=refit_every_days))
@@ -116,6 +123,10 @@ def run_backtest(
                 }
                 for column in passthrough:
                     record[column] = getattr(row, column)
+                if extra_predict is not None:
+                    extras = extra_predict(model, row)
+                    record.update(extras)
+                    extra_columns.update(dict.fromkeys(extras))
                 records.append(record)
         window_start = window.end
 
@@ -123,5 +134,6 @@ def run_backtest(
         "date", "home_team", "away_team", "ft_home", "ft_away",
         "p_home", "p_draw", "p_away", "outcome",
         *passthrough,
+        *extra_columns,
     ]
     return pd.DataFrame(records, columns=columns)

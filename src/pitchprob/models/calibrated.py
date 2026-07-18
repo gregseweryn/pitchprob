@@ -38,6 +38,7 @@ import pandas as pd
 from pitchprob.core.errors import ModelNotFittedError
 from pitchprob.evaluation.calibration import IsotonicCalibrator, TemperatureScaling
 from pitchprob.models.base import OutcomeProbabilities, validate_matches
+from pitchprob.models.dixon_coles import DEFAULT_HALF_LIFE_DAYS
 from pitchprob.models.ensemble import EnsembleModel
 
 FloatArray = npt.NDArray[np.float64]
@@ -55,7 +56,7 @@ class CalibratedEnsembleModel:
     def __init__(
         self,
         *,
-        half_life_days: float | None = 390.0,
+        half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS,
         stack_holdout: int = 380,
         calib_holdout: int = 190,
         min_train: int = 200,

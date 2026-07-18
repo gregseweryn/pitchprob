@@ -174,6 +174,55 @@ class TestPooledTrainingSingleLeagueEval:
         assert first_window_train > 35  # 31 days x 2 leagues before Sept 1
 
 
+class TestExtraPredict:
+    """The optional per-row hook that lets score-matrix models price
+    auxiliary markets (totals, Asian handicap) inside the walk-forward loop
+    with the same fitted model — no second fit, no lookahead (ADR 0010)."""
+
+    def _run(self, extra):  # type: ignore[no-untyped-def]
+        from pitchprob.models.base import OutcomeProbabilities as OP
+
+        class Dummy:
+            def fit(self, df: pd.DataFrame) -> "Dummy":
+                self.fitted = True
+                return self
+
+        return run_backtest(
+            league_frame(),
+            model_factory=Dummy,
+            predict=lambda m, row: OP(1 / 3, 1 / 3, 1 / 3),
+            extra_predict=extra,
+            start=date(2023, 9, 1),
+            refit_every_days=7,
+            min_train_matches=5,
+        )
+
+    def test_extra_columns_merged_into_records(self) -> None:
+        def extra(model: object, row: object) -> dict[str, float]:
+            assert getattr(model, "fitted", False), "hook must see a fitted model"
+            return {"p_over": 0.5, "p_under": 0.5}
+
+        result = self._run(extra)
+        assert "p_over" in result.columns
+        assert (result["p_over"] == 0.5).all()
+
+    def test_rows_without_extra_market_get_nan(self) -> None:
+        def extra(model: object, row: object) -> dict[str, float]:
+            if getattr(row, "home_team") == "A":  # noqa: B009
+                return {"p_over": 0.6}
+            return {}
+
+        result = self._run(extra)
+        covered = result[result["home_team"] == "A"]
+        uncovered = result[result["home_team"] != "A"]
+        assert (covered["p_over"] == 0.6).all()
+        assert uncovered["p_over"].isna().all()
+
+    def test_default_none_leaves_columns_untouched(self) -> None:
+        result = self._run(None)
+        assert "p_over" not in result.columns
+
+
 class TestDateAwarePredictHook:
     def test_default_predict_prefers_dated_probabilities(self) -> None:
         from pitchprob.evaluation.backtest import default_predict

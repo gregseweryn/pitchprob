@@ -27,7 +27,7 @@ from scipy.optimize import minimize
 from pitchprob.core.errors import ModelNotFittedError
 from pitchprob.markets import match_odds
 from pitchprob.models.base import OutcomeProbabilities, validate_matches
-from pitchprob.models.dixon_coles import DixonColesModel
+from pitchprob.models.dixon_coles import DEFAULT_HALF_LIFE_DAYS, DixonColesModel
 from pitchprob.models.elo import EloModel
 from pitchprob.models.gbm import GbmModel
 
@@ -67,7 +67,7 @@ class EnsembleModel:
     def __init__(
         self,
         *,
-        half_life_days: float | None = 390.0,
+        half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS,
         holdout: int = 380,
         min_train: int = 200,
         l2: float = 0.02,

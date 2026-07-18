@@ -38,6 +38,9 @@ from pitchprob.markets import (
 )
 from pitchprob.models.base import OutcomeProbabilities
 from pitchprob.models.counts import NegBinCountsModel
+from pitchprob.models.dixon_coles import (
+    DEFAULT_HALF_LIFE_DAYS as _DEFAULT_HALF_LIFE_DAYS,
+)
 from pitchprob.models.ensemble import EnsembleModel
 
 DISCLAIMER = (
@@ -56,10 +59,9 @@ COUNTS_CAVEAT = (
     "lineup information; treat them as wider-uncertainty than goals markets."
 )
 
-#: Default Dixon-Coles half-life; ~390 days is the common sweet spot reported
-#: in the club-football literature (recent form matters, but one season of
-#: signal should not evaporate).
-DEFAULT_HALF_LIFE_DAYS = 390.0
+#: Re-exported for the CLI; the number itself lives with the model
+#: (ADR 0010 unified the previously divergent defaults).
+DEFAULT_HALF_LIFE_DAYS = _DEFAULT_HALF_LIFE_DAYS
 
 #: Fitted ensembles keyed by (league, half_life, n_matches, max_match_id).
 @dataclass(frozen=True, slots=True)

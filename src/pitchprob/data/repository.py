@@ -8,7 +8,7 @@ Every write path is idempotent so that re-running ingestion is always safe:
 
 Implementations use portable SQLAlchemy Core/ORM only (no dialect-specific
 ``ON CONFLICT``) so the same code runs on Postgres in production and SQLite in
-unit tests. Ingestion volume (~35k matches) does not justify dialect forks.
+unit tests. Ingestion volume (~22k matches) does not justify dialect forks.
 """
 
 from collections.abc import Iterable, Mapping
