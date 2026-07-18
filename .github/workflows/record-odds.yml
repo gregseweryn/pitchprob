@@ -1,0 +1,40 @@
+name: record-odds
+
+# The cloud odds-tape recorder (ADR 0012): one snapshot per day, committed
+# to data/tape/ as a gzipped CSV. Cost: ~15 API credits of the 500/month
+# free tier. `pitchprob import-tape` merges the files into the local DB.
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 08:00 UTC = 10:00 CEST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: record-odds
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - name: Record snapshot
+        env:
+          PITCHPROB_ODDS_API_KEY: ${{ secrets.PITCHPROB_ODDS_API_KEY }}
+        run: uv run pitchprob record-odds --league all --csv-dir data/tape
+      - name: Commit tape
+        run: |
+          git config user.name "pitchprob-recorder"
+          git config user.email "pitchprob-recorder@users.noreply.github.com"
+          git add data/tape
+          if git diff --cached --quiet; then
+            echo "empty snapshot — nothing to commit"
+          else
+            git commit -m "tape: daily odds snapshot"
+            git pull --rebase origin main
+            git push origin main
+          fi

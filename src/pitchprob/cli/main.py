@@ -29,7 +29,11 @@ from pitchprob.services.experiments import (
 from pitchprob.services.harness import HarnessConfig, NoDataError, run_harness
 from pitchprob.services.movement_study import run_movement_study
 from pitchprob.services.prediction import DEFAULT_HALF_LIFE_DAYS, build_market_book
-from pitchprob.services.recorder import record_snapshot
+from pitchprob.services.recorder import (
+    import_tape,
+    record_snapshot,
+    record_snapshot_to_csv,
+)
 
 app = typer.Typer(
     name="pitchprob",
@@ -584,6 +588,11 @@ def record_odds(
     markets: Annotated[
         str, typer.Option(help="Comma list of The Odds API markets: h2h,totals,spreads")
     ] = "h2h,totals,spreads",
+    csv_dir: Annotated[
+        str | None,
+        typer.Option(help="Write a gzipped CSV snapshot here instead of the DB "
+                          "(the GitHub Actions cloud-recorder sink, ADR 0012)"),
+    ] = None,
 ) -> None:
     """Append one live odds snapshot to the odds_ticks tape (ADR 0012).
 
@@ -591,6 +600,8 @@ def record_odds(
     credits from the 500/month free tier — five leagues with all three
     markets is ~15 credits, i.e. about one snapshot per day.
     """
+    from pathlib import Path
+
     from pitchprob.data.adapters.odds_api import SPORT_KEYS
 
     configure_logging(get_settings().log_level)
@@ -599,15 +610,22 @@ def record_odds(
         typer.echo("PITCHPROB_ODDS_API_KEY is not set (see .env)")
         raise typer.Exit(code=1)
     leagues = list(SPORT_KEYS) if league == "all" else [league]
+    market_list = [m.strip() for m in markets.split(",") if m.strip()]
     client = _make_odds_client(settings.odds_api_key)
-    with session_scope() as session:
-        try:
-            summary = record_snapshot(
-                session, client, leagues=leagues,
-                markets=[m.strip() for m in markets.split(",") if m.strip()],
+    try:
+        if csv_dir is not None:
+            summary, path = record_snapshot_to_csv(
+                client, leagues=leagues, markets=market_list,
+                directory=Path(csv_dir),
             )
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
+            typer.echo(f"snapshot file: {path if path else '(empty snapshot, none)'}")
+        else:
+            with session_scope() as session:
+                summary = record_snapshot(
+                    session, client, leagues=leagues, markets=market_list
+                )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(
         f"recorded {summary.ticks_inserted} ticks across "
         f"{summary.events_seen} events"
@@ -615,6 +633,21 @@ def record_odds(
     typer.echo(f"bookmakers seen: {', '.join(summary.bookmakers) or '(none)'}")
     if summary.requests_remaining is not None:
         typer.echo(f"API credits remaining this month: {summary.requests_remaining}")
+
+
+@app.command("import-tape")
+def import_tape_command(
+    directory: Annotated[
+        str, typer.Option("--dir", help="Directory with *.csv.gz tape snapshots")
+    ] = "data/tape",
+) -> None:
+    """Merge cloud-recorded tape snapshots into odds_ticks (idempotent)."""
+    from pathlib import Path
+
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        files, ticks = import_tape(session, Path(directory))
+    typer.echo(f"imported {files} new snapshot files ({ticks} ticks)")
 
 
 study_app = typer.Typer(

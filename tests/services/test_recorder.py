@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 
 from pitchprob.data.adapters.odds_api import OddsSnapshot, OddsTickRecord
 from pitchprob.data.orm import Base, OddsTick
-from pitchprob.services.recorder import record_snapshot
+from pitchprob.services.recorder import (
+    import_tape,
+    record_snapshot,
+    record_snapshot_to_csv,
+)
 
 _COMMENCE = datetime(2026, 8, 15, 14, 0, tzinfo=UTC)
 
@@ -86,3 +90,39 @@ class TestRecordSnapshot:
         with pytest.raises(ValueError):
             record_snapshot(session, client, leagues=["XX"], markets=["h2h"])
         assert client.calls == []
+
+
+class TestCsvTape:
+    def test_csv_roundtrip_via_import(self, session: Session, tmp_path) -> None:
+        client = FakeClient()
+        when = datetime(2026, 8, 14, 8, 0, tzinfo=UTC)
+        summary, path = record_snapshot_to_csv(
+            client, leagues=["E0"], markets=["h2h"],
+            directory=tmp_path, observed_at=when,
+        )
+        assert summary.ticks_inserted == 2
+        assert path is not None and path.name == "20260814T080000Z.csv.gz"
+
+        files, ticks = import_tape(session, tmp_path)
+        assert (files, ticks) == (1, 2)
+        rows = session.execute(select(OddsTick)).scalars().all()
+        assert len(rows) == 2
+        assert rows[0].price == Decimal("1.65")
+        assert rows[0].home_team == "Arsenal"
+
+        # idempotent: the same snapshot never imports twice
+        files_again, ticks_again = import_tape(session, tmp_path)
+        assert (files_again, ticks_again) == (0, 0)
+        assert len(session.execute(select(OddsTick)).scalars().all()) == 2
+
+    def test_empty_snapshot_writes_no_file(self, tmp_path) -> None:
+        class EmptyClient:
+            def fetch_odds(self, sport_key: str, *, markets: list[str]) -> OddsSnapshot:
+                return OddsSnapshot(ticks=[], requests_remaining=400)
+
+        summary, path = record_snapshot_to_csv(
+            EmptyClient(), leagues=["E0"], markets=["h2h"], directory=tmp_path
+        )
+        assert summary.ticks_inserted == 0
+        assert path is None
+        assert list(tmp_path.iterdir()) == []
