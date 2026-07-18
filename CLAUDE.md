@@ -106,10 +106,26 @@ cd frontend && npm run dev               # dashboard against local API
   in `.env` (`PITCHPROB_API_FOOTBALL_KEY`, gitignored — never commit).
 - Frontend fonts via the `geist` npm package (no build-time Google fetch).
 
-## Next candidates
+## Handoff — state and next task (updated 2026-07-19)
 
-GitHub CI is live on push (`.github/workflows/ci.yml`). When the 2026/27
-season starts (mid-Aug), `pitchprob coupon` works off the live fixtures feed
-and weekly `ingest --refresh`/`xg` keep data current. Open research lanes:
-CLV-conditioned training, player-weighted absences (needs paid data — gate on
-evidence), corners/cards market validation vs quoted lines.
+**Operational now:** the odds tape records itself daily via GitHub Actions
+(`.github/workflows/record-odds.yml`, 08:00 UTC, commits
+`data/tape/*.csv.gz`; merge locally with `pitchprob import-tape`). API key in
+repo secrets + local `.env`. CI on push (`ci.yml`). Full stack in Docker
+(`make stack-up`, dashboard :3000); M7 results synced into the Postgres
+backtests table so the dashboard shows them.
+
+**Next task: the forward pick ledger** (Phase 5 part 3) — a `picks` table +
+CLI: operator logs each real bet (match, market/selection, stake 2-5 PLN,
+the PL bookmaker used and the *executed PL price*, optionally prices seen at
+other PL books), system auto-fills realized settlement from results and CLV
+vs Pinnacle close from the tape. The ledger is the real-money decision
+variable. After that: Phase 3 risk layer (flat 2-5 PLN stakes, notional
+500 PLN bankroll for caps/drawdown governor — parameters already agreed).
+
+**User context:** Polish operator — PL-licensed books only, communicates in
+Polish (docs/code stay English). See the memory directory for details.
+
+Open research lanes (evidence-gated): CLV-conditioned training,
+player-weighted absences (needs paid data), corners/cards market validation
+vs quoted lines, weekly `ingest --refresh`/`xg` automation for the season.
