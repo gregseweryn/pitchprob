@@ -115,13 +115,19 @@ repo secrets + local `.env`. CI on push (`ci.yml`). Full stack in Docker
 (`make stack-up`, dashboard :3000); M7 results synced into the Postgres
 backtests table so the dashboard shows them.
 
-**Next task: the forward pick ledger** (Phase 5 part 3) — a `picks` table +
-CLI: operator logs each real bet (match, market/selection, stake 2-5 PLN,
-the PL bookmaker used and the *executed PL price*, optionally prices seen at
-other PL books), system auto-fills realized settlement from results and CLV
-vs Pinnacle close from the tape. The ledger is the real-money decision
-variable. After that: Phase 3 risk layer (flat 2-5 PLN stakes, notional
-500 PLN bankroll for caps/drawdown governor — parameters already agreed).
+**Next task: the forward pick ledger + PL value scanner** (Phase 5 part 3) —
+one workflow: (a) `picks` table + CLI: operator logs each real bet (match,
+market/selection, stake 2-5 PLN, the PL bookmaker used and the *executed PL
+price*, optionally prices seen at other PL books), system auto-fills
+realized settlement from results and CLV vs Pinnacle close from the tape;
+(b) **scanner**: operator enters the PL odds he sees for upcoming fixtures
+and the system verdicts each one against the *live Pinnacle fair from the
+tape* (primary — the sharp anchor is the edge thesis, per the Phase 0-2a
+verdicts the model does NOT outpredict the market) and the model fair
+(secondary), i.e. "graj/nie graj + o ile". Expect mostly "no bet" — PL's
+12% turnover tax sits in the prices; value appears in boosts/promos and
+slow-moving PL prices vs a moved sharp line. After that: Phase 3 risk layer
+(flat 2-5 PLN stakes, notional 500 PLN bankroll — parameters agreed).
 
 **User context:** Polish operator — PL-licensed books only, communicates in
 Polish (docs/code stay English). See the memory directory for details.
