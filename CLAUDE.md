@@ -124,9 +124,14 @@ realized settlement from results and CLV vs Pinnacle close from the tape;
 and the system verdicts each one against the *live Pinnacle fair from the
 tape* (primary — the sharp anchor is the edge thesis, per the Phase 0-2a
 verdicts the model does NOT outpredict the market) and the model fair
-(secondary), i.e. "graj/nie graj + o ile". Expect mostly "no bet" — PL's
-12% turnover tax sits in the prices; value appears in boosts/promos and
-slow-moving PL prices vs a moved sharp line. After that: Phase 3 risk layer
+(secondary), i.e. "graj/nie graj + o ile". The scanner MUST compare
+*effective* odds per book: quoted × 0.88 for taxed PL books, × 1.0 under
+tax-free promos (Betclic "Gra bez podatku 2.0": first 1,000 PLN of stakes
+unconditionally tax-free ≈ +13.6% on effective odds — the operator's whole
+2-5 PLN measurement season fits inside it, making Betclic singles the
+default venue; after 1,000 PLN a ≥50%-AKO condition applies). Expect mostly
+"no bet" elsewhere — the 12% tax sits in the prices; value appears in
+boosts/promos and slow-moving PL prices vs a moved sharp line. After that: Phase 3 risk layer
 (flat 2-5 PLN stakes, notional 500 PLN bankroll — parameters agreed).
 
 **User context:** Polish operator — PL-licensed books only, communicates in
