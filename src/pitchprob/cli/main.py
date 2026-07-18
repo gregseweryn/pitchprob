@@ -29,6 +29,7 @@ from pitchprob.services.experiments import (
 from pitchprob.services.harness import HarnessConfig, NoDataError, run_harness
 from pitchprob.services.movement_study import run_movement_study
 from pitchprob.services.prediction import DEFAULT_HALF_LIFE_DAYS, build_market_book
+from pitchprob.services.recorder import record_snapshot
 
 app = typer.Typer(
     name="pitchprob",
@@ -40,6 +41,12 @@ app = typer.Typer(
 def _make_downloader() -> Downloader:
     settings = get_settings()
     return HttpDownloader(cache_dir=settings.data_dir / "raw")
+
+
+def _make_odds_client(api_key: str) -> Any:
+    from pitchprob.data.adapters.odds_api import OddsApiClient
+
+    return OddsApiClient(api_key=api_key)
 
 
 def _pct(value: float) -> str:
@@ -569,6 +576,45 @@ def experiment_compare(
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
     typer.echo(result.report)
+
+
+@app.command("record-odds")
+def record_odds(
+    league: Annotated[str, typer.Option(help="League code, or 'all'")] = "all",
+    markets: Annotated[
+        str, typer.Option(help="Comma list of The Odds API markets: h2h,totals,spreads")
+    ] = "h2h,totals,spreads",
+) -> None:
+    """Append one live odds snapshot to the odds_ticks tape (ADR 0012).
+
+    Designed for a scheduler: each run costs ~(markets x leagues) API
+    credits from the 500/month free tier — five leagues with all three
+    markets is ~15 credits, i.e. about one snapshot per day.
+    """
+    from pitchprob.data.adapters.odds_api import SPORT_KEYS
+
+    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    if not settings.odds_api_key:
+        typer.echo("PITCHPROB_ODDS_API_KEY is not set (see .env)")
+        raise typer.Exit(code=1)
+    leagues = list(SPORT_KEYS) if league == "all" else [league]
+    client = _make_odds_client(settings.odds_api_key)
+    with session_scope() as session:
+        try:
+            summary = record_snapshot(
+                session, client, leagues=leagues,
+                markets=[m.strip() for m in markets.split(",") if m.strip()],
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        f"recorded {summary.ticks_inserted} ticks across "
+        f"{summary.events_seen} events"
+    )
+    typer.echo(f"bookmakers seen: {', '.join(summary.bookmakers) or '(none)'}")
+    if summary.requests_remaining is not None:
+        typer.echo(f"API credits remaining this month: {summary.requests_remaining}")
 
 
 study_app = typer.Typer(

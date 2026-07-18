@@ -150,3 +150,44 @@ def test_coupon_rejects_unknown_tier(cli_env) -> None:
         cli_main.app, ["coupon", "--tier", "yolo", "--fixture", "A,B,E0"]
     )
     assert result.exit_code != 0
+
+
+def test_record_odds_offline(cli_env, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    from pitchprob.data.adapters.odds_api import OddsSnapshot, OddsTickRecord
+
+    class FakeOddsClient:
+        def fetch_odds(self, sport_key: str, *, markets: list[str]) -> OddsSnapshot:
+            tick = OddsTickRecord(
+                sport_key=sport_key,
+                event_id="ev9",
+                commence_time=datetime(2026, 8, 15, 14, 0, tzinfo=UTC),
+                home_team="Arsenal",
+                away_team="Leeds United",
+                bookmaker="pinnacle",
+                market="1x2",
+                selection="home",
+                line=None,
+                price=1.65,
+            )
+            return OddsSnapshot(ticks=[tick], requests_remaining=490)
+
+    monkeypatch.setenv("PITCHPROB_ODDS_API_KEY", "test-key")
+    get_settings.cache_clear()
+    monkeypatch.setattr(cli_main, "_make_odds_client", lambda key: FakeOddsClient())
+    result = runner.invoke(cli_main.app, ["record-odds", "--league", "E0"])
+    assert result.exit_code == 0, result.output
+    assert "recorded 1 ticks" in result.output
+    assert "pinnacle" in result.output
+    assert "490" in result.output
+
+
+def test_record_odds_requires_key(cli_env, monkeypatch) -> None:
+    # empty beats delenv: the developer's real .env may carry a key and
+    # pydantic-settings would fall back to it
+    monkeypatch.setenv("PITCHPROB_ODDS_API_KEY", "")
+    get_settings.cache_clear()
+    result = runner.invoke(cli_main.app, ["record-odds", "--league", "E0"])
+    assert result.exit_code == 1
+    assert "PITCHPROB_ODDS_API_KEY" in result.output

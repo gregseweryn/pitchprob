@@ -84,6 +84,7 @@ make stack-up                            # full containerized stack (:8000/:3000
 uv run pitchprob ingest|xg|injuries|train|predict|backtest|coupon|experiment --help
 uv run pitchprob backtest --at open --markets 1x2,ou,ah   # syndicate clock
 uv run pitchprob experiment compare ... --vs ablate=absences  # paired A/B
+uv run pitchprob record-odds --league all   # daily odds tape (ADR 0012, ~15 credits)
 cd frontend && npm run dev               # dashboard against local API
 ```
 

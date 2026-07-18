@@ -199,3 +199,31 @@ class Backtest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     config: Mapped[dict[str, Any]] = mapped_column(JsonType, default=dict)
     metrics: Mapped[dict[str, Any]] = mapped_column(JsonType, default=dict)
+
+
+class OddsTick(Base):
+    """Append-only live odds tape (ADR 0012).
+
+    Raw source naming throughout — canonical team resolution happens at
+    analysis time, never at capture time (the tape must not depend on the
+    alias table being complete on the day a price existed). ``line`` is
+    nullable here, unlike the historical ``odds`` table: the tape has no
+    uniqueness constraint to keep backend-portable, and a sentinel would
+    only fake precision.
+    """
+
+    __tablename__ = "odds_ticks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), default="the-odds-api")
+    sport_key: Mapped[str] = mapped_column(String(48), index=True)
+    event_id: Mapped[str] = mapped_column(String(64), index=True)
+    commence_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    home_team: Mapped[str] = mapped_column(String(64))
+    away_team: Mapped[str] = mapped_column(String(64))
+    bookmaker: Mapped[str] = mapped_column(String(32))
+    market: Mapped[str] = mapped_column(String(16))
+    selection: Mapped[str] = mapped_column(String(16))
+    line: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    price: Mapped[Decimal] = mapped_column(Numeric(8, 3))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     #: api-sports.io key (free tier = research instrument; see ADR 0008)
     api_football_key: str | None = None
+    #: the-odds-api.com key (live odds tape; 500 credits/month — ADR 0012)
+    odds_api_key: str | None = None
 
 
 @lru_cache(maxsize=1)

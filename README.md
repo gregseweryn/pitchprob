@@ -323,6 +323,17 @@ recommendation remains bet-at-kickoff with line shopping; real-money betting
 stays locked.* Every backtest now reports `clv_sharp` alongside `clv_exec`
 for every selector so this misreading cannot recur (ADR 0011).
 
+#### Phase 5 has started: the odds tape is rolling
+
+`pitchprob record-odds` (ADR 0012) appends daily snapshots of every visible
+bookmaker to the append-only `odds_ticks` table via The Odds API free tier.
+First live snapshot (2026-07-19): the 2026/27 EPL opening round was already
+priced — 630 quotes, 21 bookmakers including a live Pinnacle reference and
+Betfair exchange prices. Polish-licensed books are *not* carried by the API;
+executed PL prices will be captured in the forward pick ledger at bet time,
+and every real-money conclusion will be computed on those, not on EU best
+prices.
+
 ### M2 results: does the ML layer help? (same protocol, 28-day refits)
 
 | E0 2021–26, closing-odds subset (n=1730) | log-loss | RPS | ECE (home) |
