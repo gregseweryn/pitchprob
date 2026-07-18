@@ -1,5 +1,7 @@
 # pitchprob
 
+> Polska wersja / Polish summary: [README.pl.md](README.pl.md)
+
 Football probability engine: estimates **calibrated probabilities** for match markets
 (1X2, Over/Under, BTTS, Asian Handicap, Correct Score, …), computes expected value
 against bookmaker odds, and validates itself with lookahead-free walk-forward backtests
