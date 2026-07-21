@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     api_football_key: str | None = None
     #: the-odds-api.com key (live odds tape; 500 credits/month — ADR 0012)
     odds_api_key: str | None = None
+    #: odds-api.io key (Polish-book feed; free tier = 2 books, 100 req/h —
+    #: ADR 0014). Optional: everything works without it, with manual entry.
+    odds_api_io_key: str | None = None
 
 
 @lru_cache(maxsize=1)

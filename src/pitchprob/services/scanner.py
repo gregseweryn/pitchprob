@@ -27,6 +27,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pitchprob.betting.effective import PromoEvaluation, PromoTerms, promo_ev
+from pitchprob.data.adapters.odds_api_io import SOURCE as FEED_SOURCE
+from pitchprob.data.normalize import canonical_team_name, odds_api_canonical
 from pitchprob.data.orm import OddsTick
 from pitchprob.services.tape import (
     FairQuote,
@@ -36,7 +38,13 @@ from pitchprob.services.tape import (
     validate_market_selection,
 )
 
-Verdict = Literal["PLAY", "NO BET", "STALE", "NO ANCHOR"]
+Verdict = Literal["PLAY", "NO BET", "STALE", "NO ANCHOR", "UNVERIFIED"]
+
+#: Where a quote came from. ``feed`` is the odds-api.io PL feed (ADR 0014),
+#: and until ``quote_check`` clears it against the operator's own screen it
+#: cannot produce a PLAY on its own — an automatic price that nobody has
+#: verified is a lead, not a bet.
+QuoteSource = Literal["operator", "feed"]
 
 #: Minimum primary edge before the scanner says PLAY. Below ~2% the anchor
 #: error dominates: the tape is a daily snapshot and Shin fair carries
@@ -55,6 +63,7 @@ class OperatorQuote:
     bookmaker: str
     price: Decimal
     promo: PromoTerms | None = None
+    source: QuoteSource = "operator"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +73,7 @@ class QuoteVerdict:
     bookmaker: str
     price_quoted: Decimal
     promo: PromoTerms | None
+    source: QuoteSource
     evaluation: PromoEvaluation | None
     edge: float | None
     edge_model: float | None
@@ -118,18 +128,73 @@ def _resolve_event(
     )
 
 
+def feed_quotes(
+    session: Session,
+    *,
+    home_team: str,
+    away_team: str,
+    kickoff: datetime,
+    market: str,
+    selection: str,
+    line: Decimal | None,
+    at: datetime,
+) -> list[OperatorQuote]:
+    """Latest odds-api.io quotes for this selection, one per book.
+
+    The two feeds name events differently, so fixtures are joined on
+    canonical team names and a kickoff within a day — the same rule the
+    ledger uses, and with the same discipline: a fixture that does not match
+    yields nothing rather than a guess. Every quote comes back marked
+    ``source="feed"``, which is what keeps it out of a PLAY verdict.
+    """
+    home = canonical_team_name(odds_api_canonical(home_team))
+    away = canonical_team_name(odds_api_canonical(away_team))
+    rows = session.execute(
+        select(OddsTick)
+        .where(
+            OddsTick.source == FEED_SOURCE,
+            OddsTick.market == market,
+            OddsTick.selection == selection,
+            OddsTick.commence_time >= kickoff - timedelta(days=1),
+            OddsTick.commence_time <= kickoff + timedelta(days=1),
+        )
+        .order_by(OddsTick.observed_at.desc())
+    ).scalars()
+
+    latest: dict[str, OddsTick] = {}
+    for tick in rows:
+        if as_utc(tick.observed_at) > at:
+            continue
+        if tick.line != line:
+            continue
+        if canonical_team_name(odds_api_canonical(tick.home_team)) != home:
+            continue
+        if canonical_team_name(odds_api_canonical(tick.away_team)) != away:
+            continue
+        latest.setdefault(tick.bookmaker, tick)
+    return [
+        OperatorQuote(bookmaker=book, price=tick.price, source="feed")
+        for book, tick in sorted(latest.items())
+    ]
+
+
 def _judge(
     edge: float | None,
     *,
     anchored: bool,
     fresh: bool,
     min_edge: float,
+    source: QuoteSource = "operator",
 ) -> Verdict:
     if not anchored or edge is None:
         return "NO ANCHOR"
     if edge < min_edge:
         return "NO BET"
-    return "PLAY" if fresh else "STALE"
+    if not fresh:
+        return "STALE"
+    # An unvalidated feed price may flag an opportunity but may not be the
+    # basis of a bet: go and look at the book's own screen first.
+    return "PLAY" if source == "operator" else "UNVERIFIED"
 
 
 def scan(
@@ -183,12 +248,13 @@ def scan(
                 bookmaker=quote.bookmaker,
                 price_quoted=quote.price,
                 promo=quote.promo,
+                source=quote.source,
                 evaluation=evaluation,
                 edge=edge,
                 edge_model=edge_model,
                 verdict=_judge(
                     edge, anchored=anchor is not None, fresh=fresh,
-                    min_edge=min_edge,
+                    min_edge=min_edge, source=quote.source,
                 ),
             )
         )

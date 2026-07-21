@@ -212,6 +212,74 @@ class TestClosingFair:
         assert closing_fair(session, event_id="ev1", market="1x2") is None
 
 
+class TestCornersMarkets:
+    """Corners (ADR 0014) reuse the goals shapes, so the read-model needs no
+    new code path — these pin that the reuse actually holds, including the
+    invariant that matters most: no lookahead."""
+
+    def test_corners_totals_de_margin_like_goals_totals(
+        self, session: Session
+    ) -> None:
+        for selection, price in (("over", "1.75"), ("under", "1.85")):
+            session.add(
+                _tick(
+                    selection=selection, price=price, observed_at=_T1,
+                    market="corners_ou", line="10.5",
+                )
+            )
+        session.flush()
+        quote = fair_at(
+            session, event_id="ev1", market="corners_ou",
+            at=_T1 + timedelta(hours=1),
+        )
+        assert quote is not None
+        assert quote.line == Decimal("10.5")
+        expected = remove_overround_shin([1.75, 1.85])
+        assert quote.probabilities["over"] == pytest.approx(expected[0])
+        assert quote.probabilities["under"] == pytest.approx(expected[1])
+
+    def test_corners_handicap_selections_are_home_and_away(
+        self, session: Session
+    ) -> None:
+        for selection, price in (("home", "1.80"), ("away", "1.95")):
+            session.add(
+                _tick(
+                    selection=selection, price=price, observed_at=_T1,
+                    market="corners_ah", line="-0.5",
+                )
+            )
+        session.flush()
+        quote = fair_at(
+            session, event_id="ev1", market="corners_ah", at=_T2
+        )
+        assert quote is not None
+        assert set(quote.probabilities) == {"home", "away"}
+        assert quote.line == Decimal("-0.5")
+
+    def test_a_later_corners_snapshot_is_never_used(
+        self, session: Session
+    ) -> None:
+        for observed, over, under in (
+            (_T1, "1.75", "1.85"),
+            (_T2, "1.50", "2.30"),
+        ):
+            for selection, price in (("over", over), ("under", under)):
+                session.add(
+                    _tick(
+                        selection=selection, price=price, observed_at=observed,
+                        market="corners_ou", line="10.5",
+                    )
+                )
+        session.flush()
+        quote = fair_at(
+            session, event_id="ev1", market="corners_ou",
+            at=_T2 - timedelta(minutes=1),
+        )
+        assert quote is not None
+        assert quote.observed_at.replace(tzinfo=UTC) == _T1
+        assert quote.prices["over"] == Decimal("1.75")
+
+
 class TestFindEvents:
     def test_matches_substring_case_insensitively(self, session: Session) -> None:
         _seed_1x2(session)

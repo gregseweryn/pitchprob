@@ -10,13 +10,17 @@ a day once the season starts.
 The summary surfaces the two operational facts that matter: which bookmaker
 keys actually appear (the empirical answer to "can we see Polish books?")
 and how much API quota remains.
+
+``record_corners_to_csv`` is the second, narrower pass (ADR 0014). Corners
+are billed per fixture rather than per league, so it runs on a budget with
+two ceilings and reports which one stopped it.
 """
 
 import csv
 import gzip
 import io
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
@@ -24,12 +28,26 @@ from typing import Protocol
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from pitchprob.data.adapters.odds_api import SPORT_KEYS, OddsSnapshot, OddsTickRecord
+from pitchprob.data.adapters.odds_api import (
+    CORNERS_MARKETS,
+    SPORT_KEYS,
+    EventListing,
+    OddsSnapshot,
+    OddsTickRecord,
+)
 from pitchprob.data.orm import OddsTick
 
 
 class _OddsClient(Protocol):
     def fetch_odds(self, sport_key: str, *, markets: list[str]) -> OddsSnapshot: ...
+
+
+class _CornersClient(Protocol):
+    def fetch_events(self, sport_key: str) -> EventListing: ...
+
+    def fetch_event_odds(
+        self, sport_key: str, event_id: str, *, markets: list[str]
+    ) -> OddsSnapshot: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,8 +140,15 @@ def record_snapshot_to_csv(
     _validate_leagues(leagues)
     when = observed_at if observed_at is not None else datetime.now(tz=UTC)
     ticks, remaining = _fetch_all(client, leagues, markets)
+    return _summary(ticks, remaining), _write_csv(ticks, directory, when)
+
+
+def _write_csv(
+    ticks: list[OddsTickRecord], directory: Path, when: datetime
+) -> Path | None:
+    """One gzipped CSV per snapshot; an empty snapshot writes no file."""
     if not ticks:
-        return _summary(ticks, remaining), None
+        return None
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{when:%Y%m%dT%H%M%S}Z.csv.gz"
     buffer = io.StringIO()
@@ -142,11 +167,120 @@ def record_snapshot_to_csv(
                 "selection": tick.selection,
                 "line": "" if tick.line is None else str(tick.line),
                 "price": repr(tick.price),
-                "observed_at": when.isoformat(),
+                # A tick that knows its own instant keeps it; snapshot
+                # endpoints do not, and get the instant we looked.
+                "observed_at": (tick.observed_at or when).isoformat(),
             }
         )
     path.write_bytes(gzip.compress(buffer.getvalue().encode("utf-8")))
-    return _summary(ticks, remaining), path
+    return path
+
+
+#: Below this many credits left in the month, the corners pilot declines to
+#: spend. The main 1x2/ou/ah tape is the load-bearing instrument (the scanner
+#: and the pick ledger both anchor on it); corners are an experiment, and an
+#: experiment does not get to starve the instrument it is measured against.
+DEFAULT_RESERVE = 60
+
+
+@dataclass(frozen=True, slots=True)
+class CornersSummary:
+    """What one corners pass cost and why it stopped.
+
+    ``credits_spent`` comes from the API's own ``x-requests-last`` header
+    rather than from a prediction: the event-odds endpoint bills per market
+    *returned*, so the cost of a fixture is not knowable before asking.
+    """
+
+    ticks_inserted: int
+    events_in_window: int
+    events_priced: int
+    credits_spent: int
+    bookmakers: list[str]
+    requests_remaining: int | None
+    stop_reason: str | None
+
+
+def record_corners_to_csv(
+    client: _CornersClient,
+    *,
+    leagues: list[str],
+    within_hours: int,
+    directory: Path,
+    reserve: int = DEFAULT_RESERVE,
+    max_credits: int | None = None,
+    now: datetime | None = None,
+) -> tuple[CornersSummary, Path | None]:
+    """Record corners for fixtures close to kickoff (ADR 0014).
+
+    Corners live behind the per-fixture event-odds endpoint, so this pass
+    costs credits proportional to fixtures, not to leagues. Two facts
+    measured on 2026-07-21 shape it: corners are not priced until roughly a
+    day before kickoff (so a narrow ``within_hours`` window wastes nothing),
+    and a fixture with nothing priced returns empty and is billed zero (so
+    looking too early is free, merely pointless).
+
+    Spending is bounded twice over — ``reserve`` protects the month's main
+    tape, ``max_credits`` bounds this single run — and both stops are
+    reported rather than silent.
+    """
+    _validate_leagues(leagues)
+    # One clock: the instant we looked is both the window's origin and the
+    # ticks' observed_at. Splitting them would let the tape claim a
+    # freshness it never had.
+    when = now if now is not None else datetime.now(tz=UTC)
+    horizon = when + timedelta(hours=within_hours)
+
+    ticks: list[OddsTickRecord] = []
+    remaining: int | None = None
+    spent = 0
+    in_window = 0
+    priced = 0
+    stop_reason: str | None = None
+
+    for league in leagues:
+        sport_key = SPORT_KEYS[league]
+        listing = client.fetch_events(sport_key)  # free: prices nothing
+        if listing.requests_remaining is not None:
+            remaining = listing.requests_remaining
+        upcoming = [
+            event
+            for event in listing.events
+            if when <= event.commence_time <= horizon
+        ]
+        in_window += len(upcoming)
+        for event in upcoming:
+            if remaining is not None and remaining <= reserve:
+                stop_reason = (
+                    f"quota reserve reached ({remaining} credits left, "
+                    f"reserve {reserve}) — the main tape keeps the rest"
+                )
+                break
+            if max_credits is not None and spent >= max_credits:
+                stop_reason = f"max-credits ceiling reached ({spent}/{max_credits})"
+                break
+            snapshot = client.fetch_event_odds(
+                sport_key, event.event_id, markets=CORNERS_MARKETS
+            )
+            spent += snapshot.credits_spent or 0
+            if snapshot.requests_remaining is not None:
+                remaining = snapshot.requests_remaining
+            if snapshot.ticks:
+                priced += 1
+                ticks.extend(snapshot.ticks)
+        if stop_reason is not None:
+            break
+
+    summary = CornersSummary(
+        ticks_inserted=len(ticks),
+        events_in_window=in_window,
+        events_priced=priced,
+        credits_spent=spent,
+        bookmakers=sorted({t.bookmaker for t in ticks}),
+        requests_remaining=remaining,
+        stop_reason=stop_reason,
+    )
+    return summary, _write_csv(ticks, directory, when)
 
 
 def import_tape(session: Session, directory: Path) -> tuple[int, int]:

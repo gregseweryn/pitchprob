@@ -262,6 +262,37 @@ class Pick(Base):
     notes: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
 
+class QuoteCheck(Base):
+    """One operator sighting of a price, against what the feed claimed.
+
+    The audit's condition for wiring odds-api.io into the scanner is that
+    its quotes be validated by hand for two to three weeks first (Etap 5),
+    so this table holds the ground truth: ``price_seen`` is what the
+    operator read on the bookmaker's own site, ``price_feed`` is what the
+    feed said for the same selection at that instant, and ``price_feed``
+    being NULL is itself a result — coverage gaps are a reason to distrust a
+    feed exactly as much as wrong prices are.
+    """
+
+    __tablename__ = "quote_checks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    bookmaker: Mapped[str] = mapped_column(String(32), index=True)
+    event_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    home_team: Mapped[str] = mapped_column(String(64))
+    away_team: Mapped[str] = mapped_column(String(64))
+    market: Mapped[str] = mapped_column(String(16))
+    selection: Mapped[str] = mapped_column(String(16))
+    line: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    price_seen: Mapped[Decimal] = mapped_column(Numeric(8, 3))
+    price_feed: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
+    feed_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
 class OddsTick(Base):
     """Append-only live odds tape (ADR 0012).
 

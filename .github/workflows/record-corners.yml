@@ -1,0 +1,51 @@
+name: record-corners
+
+# The corners pilot (ADR 0014): one snapshot per fixture, close to kickoff.
+#
+# Why 20:00 UTC with a 26-hour window: corners are only priced from roughly a
+# day before kickoff, so this pass has to land inside that window rather than
+# sweep the fixture list. Friday's run covers Saturday's matches, Saturday's
+# covers Sunday's. One snapshot per fixture, ~10 E0 fixtures per round —
+# about 43 of the 500 monthly credits, taken from the headroom the main tape
+# (`record-odds.yml`, 08:00 UTC, ~450/month) leaves behind.
+#
+# The recorder refuses to spend below `--reserve`; the main tape is the
+# load-bearing instrument and the pilot does not get to starve it.
+on:
+  schedule:
+    - cron: "0 20 * * *"   # 20:00 UTC = 22:00 CEST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: record-corners
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+      - run: uv sync --frozen
+      - name: Record corners snapshot
+        env:
+          PITCHPROB_ODDS_API_KEY: ${{ secrets.PITCHPROB_ODDS_API_KEY }}
+        run: |
+          uv run pitchprob record-corners \
+            --league E0 --within-hours 26 --csv-dir data/tape \
+            --reserve 60 --max-credits 20
+      - name: Commit tape
+        run: |
+          git config user.name "pitchprob-recorder"
+          git config user.email "pitchprob-recorder@users.noreply.github.com"
+          git add data/tape
+          if git diff --cached --quiet; then
+            echo "no corners priced in the window — nothing to commit"
+          else
+            git commit -m "tape: corners snapshot"
+            git pull --rebase origin main
+            git push origin main
+          fi

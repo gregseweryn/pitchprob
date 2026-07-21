@@ -6,6 +6,7 @@ seam that tests replace with an offline fake.
 
 import json as json_lib
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Annotated, Any
 
 import httpx
@@ -16,7 +17,7 @@ from pitchprob.core.db import session_scope
 from pitchprob.core.errors import PitchprobError
 from pitchprob.core.logging import configure_logging
 from pitchprob.data.dataset import load_matches_frame
-from pitchprob.data.orm import Backtest, ModelRun
+from pitchprob.data.orm import Backtest, ModelRun, OddsTick
 from pitchprob.data.service import LEAGUES, Downloader, HttpDownloader, IngestionService
 from pitchprob.models.dixon_coles import DixonColesModel
 from pitchprob.models.elo import EloModel
@@ -27,10 +28,18 @@ from pitchprob.services.experiments import (
     run_experiment,
 )
 from pitchprob.services.harness import HarnessConfig, NoDataError, run_harness
+from pitchprob.services.latency_map import (
+    DEFAULT_MIN_MOVE,
+    DEFAULT_MIN_OBSERVED,
+    run_latency_map,
+)
 from pitchprob.services.movement_study import run_movement_study
 from pitchprob.services.prediction import DEFAULT_HALF_LIFE_DAYS, build_market_book
+from pitchprob.services.quote_check import log_quote_check, quote_check_report
 from pitchprob.services.recorder import (
+    DEFAULT_RESERVE,
     import_tape,
+    record_corners_to_csv,
     record_snapshot,
     record_snapshot_to_csv,
 )
@@ -650,6 +659,73 @@ def record_odds(
         typer.echo(f"API credits remaining this month: {summary.requests_remaining}")
 
 
+@app.command("record-corners")
+def record_corners(
+    league: Annotated[str, typer.Option(help="League code, or 'all'")] = "E0",
+    within_hours: Annotated[
+        int, typer.Option(help="Only price fixtures kicking off within this many hours")
+    ] = 26,
+    csv_dir: Annotated[
+        str, typer.Option(help="Directory for the gzipped CSV snapshot")
+    ] = "data/tape",
+    reserve: Annotated[
+        int, typer.Option(help="Stop if fewer than this many monthly credits remain")
+    ] = DEFAULT_RESERVE,
+    max_credits: Annotated[
+        int | None, typer.Option(help="Hard ceiling on credits spent by this run")
+    ] = None,
+) -> None:
+    """Record corners odds for fixtures close to kickoff (ADR 0014).
+
+    Unlike `record-odds`, this costs credits per *fixture*: corners are an
+    additional market, served one event at a time. Measured 2026-07-21:
+    Pinnacle prices corners about a day before kickoff and not at three
+    days, and fixtures with nothing priced are billed zero — so a 26-hour
+    window costs roughly one credit per fixture and nothing for looking.
+    The E0 pilot is ~10 fixtures per round, ~43 credits per month.
+
+    Both spending limits are honoured and the reason for stopping is
+    printed: the main tape's monthly budget comes first.
+    """
+    from pathlib import Path
+
+    from pitchprob.data.adapters.odds_api import SPORT_KEYS, scrub_http_error
+
+    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    if not settings.odds_api_key:
+        typer.echo("PITCHPROB_ODDS_API_KEY is not set (see .env)")
+        raise typer.Exit(code=1)
+    leagues = list(SPORT_KEYS) if league == "all" else [league]
+    try:
+        summary, path = record_corners_to_csv(
+            _make_odds_client(settings.odds_api_key),
+            leagues=leagues,
+            within_hours=within_hours,
+            directory=Path(csv_dir),
+            reserve=reserve,
+            max_credits=max_credits,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        raise typer.Exit(code=1) from None
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        f"{summary.events_in_window} fixtures within {within_hours}h; "
+        f"{summary.events_priced} had corners priced"
+    )
+    typer.echo(
+        f"recorded {summary.ticks_inserted} ticks for {summary.credits_spent} credits"
+    )
+    typer.echo(f"bookmakers seen: {', '.join(summary.bookmakers) or '(none)'}")
+    typer.echo(f"snapshot file: {path if path else '(empty snapshot, none)'}")
+    if summary.requests_remaining is not None:
+        typer.echo(f"API credits remaining this month: {summary.requests_remaining}")
+    if summary.stop_reason is not None:
+        typer.echo(f"stopped early: {summary.stop_reason}")
+
+
 @app.command("import-tape")
 def import_tape_command(
     directory: Annotated[
@@ -806,6 +882,11 @@ def scan_command(
         float, typer.Option(help="Minimum effective edge vs the sharp anchor "
                                  "before PLAY")
     ] = 0.02,
+    feed: Annotated[
+        bool,
+        typer.Option(help="Also pull PL quotes from the odds-api.io feed "
+                          "(marked UNVERIFIED until quote-check clears it)"),
+    ] = False,
 ) -> None:
     """Verdict PL quotes against the live Pinnacle fair from the tape.
 
@@ -816,14 +897,39 @@ def scan_command(
     """
     from decimal import Decimal
 
+    from pitchprob.services.scanner import feed_quotes
     from pitchprob.services.scanner import scan as run_scan
 
     configure_logging(get_settings().log_level)
-    if not quote:
-        raise typer.BadParameter("at least one --quote book:price is required")
-    quotes = _build_quotes(quote, tax_free or [], boost or [], haircut or [])
+    if not quote and not feed:
+        raise typer.BadParameter(
+            "at least one --quote book:price is required (or --feed)"
+        )
+    quotes = _build_quotes(quote or [], tax_free or [], boost or [], haircut or [])
     with session_scope() as session:
         try:
+            if feed:
+                probe = run_scan(
+                    session, query=match, market=market, selection=selection,
+                    line=Decimal(line) if line is not None else None,
+                    quotes=[], min_edge=min_edge,
+                )
+                quotes = quotes + feed_quotes(
+                    session,
+                    home_team=probe.home_team,
+                    away_team=probe.away_team,
+                    kickoff=probe.commence_time,
+                    market=market,
+                    selection=selection,
+                    line=Decimal(line) if line is not None else None,
+                    at=datetime.now(tz=UTC),
+                )
+                if not quotes:
+                    typer.echo(
+                        "the feed has no quote for this selection — nothing "
+                        "to verdict (record it with `pitchprob oddsio record`)"
+                    )
+                    raise typer.Exit(code=1)
             result = run_scan(
                 session,
                 query=match,
@@ -1163,6 +1269,257 @@ def study_movement(
             )
         )
     typer.echo(result.report)
+
+
+@study_app.command("latency")
+def study_latency(
+    reference: Annotated[
+        str, typer.Option(help="The sharp book everyone else is measured against")
+    ] = "pinnacle",
+    source: Annotated[
+        str | None, typer.Option(help="Restrict to one tape source, e.g. odds-api-io")
+    ] = None,
+    since: Annotated[
+        str | None, typer.Option(help="Only ticks observed at/after this ISO instant")
+    ] = None,
+    markets: Annotated[str, typer.Option(help="Comma list of markets")] = "1x2,ou,ah",
+    min_move: Annotated[
+        float, typer.Option(help="Reference move size that counts, in probability")
+    ] = DEFAULT_MIN_MOVE,
+    min_observed: Annotated[
+        int, typer.Option(help="Moves a book needs before its median is a finding")
+    ] = DEFAULT_MIN_OBSERVED,
+    out: Annotated[
+        str | None, typer.Option(help="Also write the markdown report here")
+    ] = None,
+) -> None:
+    """Which bookmaker follows the sharp line last (ADR 0014)?
+
+    Expect "No measurement" until a feed carrying Polish books is recording:
+    The Odds API has none, and one daily snapshot cannot resolve a delay
+    measured in hours. The report names which precondition failed.
+    """
+    from pathlib import Path
+
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        result = run_latency_map(
+            session,
+            reference=reference,
+            source=source,
+            since=_parse_utc_datetime(since) if since else None,
+            markets=[m.strip() for m in markets.split(",") if m.strip()],
+            min_move=min_move,
+            min_observed=min_observed,
+        )
+    if out is not None:
+        Path(out).write_text(result.report + "\n", encoding="utf-8")
+        typer.echo(f"report written to {out}")
+    typer.echo(result.report)
+
+
+# --- ADR 0014: the odds-api.io PL feed and its validation ----------------
+
+oddsio_app = typer.Typer(
+    help="The odds-api.io Polish-book feed (ADR 0014) — optional, "
+         "and informational until quote-check validates it."
+)
+app.add_typer(oddsio_app, name="oddsio")
+
+
+def _oddsio_client() -> Any:
+    from pitchprob.data.adapters.odds_api_io import OddsApiIoClient
+
+    settings = get_settings()
+    if not settings.odds_api_io_key:
+        typer.echo(
+            "PITCHPROB_ODDS_API_IO_KEY is not set (see .env). Sign up at "
+            "odds-api.io; the free tier allows two bookmakers."
+        )
+        raise typer.Exit(code=1)
+    return OddsApiIoClient(settings.odds_api_io_key)
+
+
+@oddsio_app.command("books")
+def oddsio_books(
+    filter_text: Annotated[
+        str, typer.Option("--filter", help="Substring to match, e.g. 'PL'")
+    ] = "PL",
+) -> None:
+    """List the feed's bookmaker catalogue (no API key needed).
+
+    This is how the PL coverage claim was checked in the first place: on
+    2026-07-21 it showed Betclic PL, STS PL, eFortuna PL, Betfan PL,
+    LVbet PL and Superbet active — and no Pinnacle.
+    """
+    from pitchprob.data.adapters.odds_api_io import OddsApiIoClient, scrub_http_error
+
+    configure_logging(get_settings().log_level)
+    try:
+        books = OddsApiIoClient(api_key="").list_bookmakers()
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        raise typer.Exit(code=1) from None
+    matches = [
+        b for b in books if filter_text.lower() in str(b.get("name", "")).lower()
+    ]
+    for book in matches:
+        state = "active" if book.get("active") else "inactive"
+        typer.echo(f"{book.get('name')}  [{state}]")
+    typer.echo(f"{len(matches)} of {len(books)} bookmakers match {filter_text!r}")
+
+
+@oddsio_app.command("probe")
+def oddsio_probe(
+    event_id: Annotated[str, typer.Option(help="Feed event id")],
+    books: Annotated[
+        str, typer.Option(help="Comma list of feed bookmaker names")
+    ] = "Betclic PL,STS PL",
+) -> None:
+    """Dump the raw market names the feed sends for one event.
+
+    The market mapping is built from this output rather than from the
+    vendor's documentation — names are the part of a third-party feed most
+    likely to differ from what is written down.
+    """
+    from pitchprob.data.adapters.odds_api_io import (
+        MARKET_NAMES,
+        observed_markets,
+        scrub_http_error,
+    )
+
+    configure_logging(get_settings().log_level)
+    client = _oddsio_client()
+    try:
+        payload = client.fetch_odds(
+            event_id, bookmakers=[b.strip() for b in books.split(",")]
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        raise typer.Exit(code=1) from None
+    for book, markets in observed_markets(payload).items():
+        typer.echo(f"{book}:")
+        for name in markets:
+            mapped = MARKET_NAMES.get(name)
+            typer.echo(f"  {name}  ->  {mapped or '(unmapped, skipped)'}")
+
+
+@oddsio_app.command("record")
+def oddsio_record(
+    event_id: Annotated[str, typer.Option(help="Feed event id")],
+    books: Annotated[
+        str, typer.Option(help="Comma list of feed bookmaker names")
+    ] = "Betclic PL,STS PL",
+    movements: Annotated[
+        bool,
+        typer.Option(help="Also pull each book's full movement history (1X2)"),
+    ] = False,
+) -> None:
+    """Append this feed's quotes to the tape as source=odds-api-io.
+
+    With --movements, each book's recorded price history is appended too:
+    one tick per movement at the instant the book moved, which is the only
+    resolution fine enough for `pitchprob study latency`.
+    """
+    from pitchprob.data.adapters.odds_api_io import (
+        SOURCE,
+        event_ref,
+        parse_odds,
+        scrub_http_error,
+    )
+
+    configure_logging(get_settings().log_level)
+    client = _oddsio_client()
+    book_list = [b.strip() for b in books.split(",")]
+    now = datetime.now(tz=UTC)
+    try:
+        payload = client.fetch_odds(event_id, bookmakers=book_list)
+        ticks = parse_odds(payload, observed_at=now)
+        if movements:
+            reference = event_ref(payload)
+            for book in book_list:
+                ticks.extend(
+                    client.fetch_movements(reference, bookmaker=book, market="1x2")
+                )
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        raise typer.Exit(code=1) from None
+    with session_scope() as session:
+        for tick in ticks:
+            session.add(
+                OddsTick(
+                    source=SOURCE,
+                    sport_key=tick.sport_key,
+                    event_id=tick.event_id,
+                    commence_time=tick.commence_time,
+                    home_team=tick.home_team,
+                    away_team=tick.away_team,
+                    bookmaker=tick.bookmaker,
+                    market=tick.market,
+                    selection=tick.selection,
+                    line=tick.line,
+                    price=Decimal(str(tick.price)),
+                    observed_at=tick.observed_at or now,
+                )
+            )
+    typer.echo(f"appended {len(ticks)} ticks from {', '.join(book_list)}")
+
+
+quote_app = typer.Typer(
+    help="Validate the feed against what the operator actually sees."
+)
+app.add_typer(quote_app, name="quote-check")
+
+
+@quote_app.command("log")
+def quote_check_log(
+    book: Annotated[str, typer.Option(help="Feed bookmaker name, e.g. 'Betclic PL'")],
+    home: Annotated[str, typer.Option(help="Home team as the feed names it")],
+    away: Annotated[str, typer.Option(help="Away team as the feed names it")],
+    market: Annotated[str, typer.Option(help="1x2 | ou | ah")],
+    selection: Annotated[str, typer.Option(help="home/draw/away or over/under")],
+    seen: Annotated[str, typer.Option(help="The price on the bookmaker's screen")],
+    line: Annotated[str | None, typer.Option(help="Line for ou/ah")] = None,
+    event_id: Annotated[str | None, typer.Option(help="Feed event id")] = None,
+    notes: Annotated[str | None, typer.Option(help="Free-text note")] = None,
+) -> None:
+    """Record what you saw on the book's own site, right now.
+
+    This is the ground truth the feed is judged against — type the price you
+    can actually see, not the one you expected.
+    """
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        try:
+            check = log_quote_check(
+                session,
+                bookmaker=book,
+                home_team=home,
+                away_team=away,
+                market=market,
+                selection=selection,
+                price_seen=Decimal(seen),
+                line=Decimal(line) if line else None,
+                event_id=event_id,
+                notes=notes,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        feed = (
+            f"{check.price_feed} (observed {check.feed_observed_at:%Y-%m-%d %H:%M}Z)"
+            if check.price_feed is not None and check.feed_observed_at is not None
+            else "(the feed had nothing for this selection)"
+        )
+    typer.echo(f"logged: you saw {seen}, feed said {feed}")
+
+
+@quote_app.command("report")
+def quote_check_report_command() -> None:
+    """Has the feed earned the right to be a scanner input yet?"""
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        _verdicts, report = quote_check_report(session)
+    typer.echo(report)
 
 
 def main() -> None:

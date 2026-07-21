@@ -1,17 +1,23 @@
 """Recorder service tests — offline, in-memory SQLite, fake client."""
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from pitchprob.data.adapters.odds_api import OddsSnapshot, OddsTickRecord
+from pitchprob.data.adapters.odds_api import (
+    EventListing,
+    EventSummary,
+    OddsSnapshot,
+    OddsTickRecord,
+)
 from pitchprob.data.orm import Base, OddsTick
 from pitchprob.services.recorder import (
     import_tape,
+    record_corners_to_csv,
     record_snapshot,
     record_snapshot_to_csv,
 )
@@ -126,3 +132,138 @@ class TestCsvTape:
         assert summary.ticks_inserted == 0
         assert path is None
         assert list(tmp_path.iterdir()) == []
+
+
+_NOW = datetime(2026, 8, 14, 20, 0, tzinfo=UTC)
+
+
+class FakeCornersClient:
+    """Fixture list is free; each priced fixture costs what it returns.
+
+    ``priced`` names the fixtures that actually have corners quoted — the
+    rest come back empty and, per the API's billing rule, free.
+    """
+
+    def __init__(self, *, remaining: int = 400, priced: set[str] | None = None):
+        self.remaining = remaining
+        self.priced = {"in-window"} if priced is None else priced
+        self.listed: list[str] = []
+        self.priced_calls: list[str] = []
+
+    def fetch_events(self, sport_key: str) -> EventListing:
+        self.listed.append(sport_key)
+        return EventListing(
+            events=[
+                # 3h after `now`: inside any sane window
+                EventSummary("in-window", _NOW + timedelta(hours=3), "A", "B"),
+                # 5 days out: corners are not priced this early (measured)
+                EventSummary("far", _NOW + timedelta(days=5), "C", "D"),
+                # already kicked off: never worth a credit
+                EventSummary("started", _NOW - timedelta(hours=1), "E", "F"),
+            ],
+            requests_remaining=self.remaining,
+        )
+
+    def fetch_event_odds(
+        self, sport_key: str, event_id: str, *, markets: list[str]
+    ) -> OddsSnapshot:
+        self.priced_calls.append(event_id)
+        if event_id not in self.priced:
+            return OddsSnapshot(
+                ticks=[], requests_remaining=self.remaining, credits_spent=0
+            )
+        self.remaining -= 2
+        return OddsSnapshot(
+            ticks=[
+                replace(
+                    _tick("pinnacle", "over", 1.75),
+                    event_id=event_id,
+                    sport_key=sport_key,
+                    market="corners_ou",
+                    line=Decimal("10.5"),
+                ),
+            ],
+            requests_remaining=self.remaining,
+            credits_spent=2,
+        )
+
+
+class TestCornersRecorder:
+    def test_only_fixtures_inside_the_window_cost_a_credit(self, tmp_path) -> None:
+        client = FakeCornersClient()
+        summary, path = record_corners_to_csv(
+            client, leagues=["E0"], within_hours=26,
+            directory=tmp_path, now=_NOW,
+        )
+        assert client.listed == ["soccer_epl"]
+        # the 5-day fixture and the started one are never requested
+        assert client.priced_calls == ["in-window"]
+        assert summary.credits_spent == 2
+        assert summary.ticks_inserted == 1
+        assert path is not None
+
+    def test_unpriced_fixture_is_free_and_does_not_stop_the_run(
+        self, tmp_path
+    ) -> None:
+        client = FakeCornersClient(priced=set())
+        summary, path = record_corners_to_csv(
+            client, leagues=["E0"], within_hours=26,
+            directory=tmp_path, now=_NOW,
+        )
+        assert client.priced_calls == ["in-window"]
+        assert summary.credits_spent == 0
+        assert summary.ticks_inserted == 0
+        assert path is None
+
+    def test_quota_reserve_stops_before_any_paid_request(self, tmp_path) -> None:
+        """The corners pilot must never starve the main tape: below the
+        reserve it looks (free) and then declines to spend."""
+        client = FakeCornersClient(remaining=55)
+        summary, _path = record_corners_to_csv(
+            client, leagues=["E0"], within_hours=26, reserve=60,
+            directory=tmp_path, now=_NOW,
+        )
+        assert client.priced_calls == []
+        assert summary.credits_spent == 0
+        assert summary.stop_reason is not None
+        assert "reserve" in summary.stop_reason
+
+    def test_max_credits_is_a_hard_ceiling(self, tmp_path) -> None:
+        client = FakeCornersClient(
+            priced={"in-window", "second"}
+        )
+        original = client.fetch_events
+
+        def two_in_window(sport_key: str) -> EventListing:
+            listing = original(sport_key)
+            return EventListing(
+                events=[
+                    *listing.events,
+                    EventSummary("second", _NOW + timedelta(hours=4), "G", "H"),
+                ],
+                requests_remaining=client.remaining,
+            )
+
+        client.fetch_events = two_in_window  # type: ignore[method-assign]
+        summary, _ = record_corners_to_csv(
+            client, leagues=["E0"], within_hours=26, max_credits=2,
+            directory=tmp_path, now=_NOW,
+        )
+        assert client.priced_calls == ["in-window"]
+        assert summary.credits_spent == 2
+        assert summary.stop_reason is not None
+        assert "max-credits" in summary.stop_reason
+
+    def test_corners_ticks_roundtrip_through_the_tape(
+        self, session: Session, tmp_path
+    ) -> None:
+        record_corners_to_csv(
+            FakeCornersClient(), leagues=["E0"], within_hours=26,
+            directory=tmp_path, now=_NOW,
+        )
+        files, ticks = import_tape(session, tmp_path)
+        assert (files, ticks) == (1, 1)
+        row = session.execute(select(OddsTick)).scalars().one()
+        assert row.market == "corners_ou"
+        assert row.line == Decimal("10.5")
+        assert row.observed_at.replace(tzinfo=UTC) == _NOW

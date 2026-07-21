@@ -107,6 +107,34 @@ class TestScanVerdicts:
         assert sts.edge == pytest.approx(fair_home * 2.30 * 0.88 - 1.0)
         assert sts.verdict == "NO BET"
 
+    def test_an_unvalidated_feed_quote_never_reaches_play(
+        self, session: Session
+    ) -> None:
+        """Same price, same edge, same freshness as the PLAY above — only
+        the provenance differs. Until the odds-api.io feed clears
+        validation (ADR 0014), it may flag an opportunity but not authorise
+        a bet; the operator has to see it on the book's own screen."""
+        _seed_1x2(session)
+        result = scan(
+            session,
+            query="arsenal",
+            market="1x2",
+            selection="home",
+            quotes=[
+                OperatorQuote(
+                    "betclic", Decimal("2.30"),
+                    promo=PromoTerms(tax_free=True), source="feed",
+                ),
+            ],
+            now=_NOW,
+        )
+        verdict = result.verdicts[0]
+        assert verdict.source == "feed"
+        assert verdict.verdict == "UNVERIFIED"
+        # the edge itself is still computed — the lead is real, the
+        # authorisation is not
+        assert verdict.edge is not None and verdict.edge > 0
+
     def test_min_edge_gate_on_exact_numbers(self, session: Session) -> None:
         _seed_symmetric_totals(session)  # Shin fair exactly 0.5
         result = scan(

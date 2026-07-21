@@ -30,6 +30,12 @@ MARKET_SELECTIONS: dict[str, tuple[str, ...]] = {
     "1x2": ("home", "draw", "away"),
     "ou": ("over", "under"),
     "ah": ("home", "away"),
+    # Corners (ADR 0014). Same two shapes as the goals markets, so every
+    # read-model below — completeness, main-line choice, Shin de-margin —
+    # applies unchanged. What differs is coverage, not geometry: corners
+    # are only on the tape from roughly a day before kickoff.
+    "corners_ou": ("over", "under"),
+    "corners_ah": ("home", "away"),
 }
 
 SHARP_BOOKMAKER = "pinnacle"
@@ -73,7 +79,7 @@ def _validate_market(market: str) -> tuple[str, ...]:
 
 
 #: Markets whose bets carry a line; 1X2 must not.
-LINE_MARKETS = frozenset({"ou", "ah"})
+LINE_MARKETS = frozenset({"ou", "ah", "corners_ou", "corners_ah"})
 
 
 def validate_market_selection(
