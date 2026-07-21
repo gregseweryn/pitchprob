@@ -225,3 +225,35 @@ class TestClient:
 
     def test_the_source_tag_marks_these_ticks_as_a_different_feed(self) -> None:
         assert SOURCE == "odds-api-io"
+
+
+class TestSelectBookmakers:
+    """The free tier allows two books, chosen through a **PUT**. Written
+    against fixtures first time round, this shipped as a GET and would have
+    failed 405 the moment a real key existed — the one call in this adapter
+    that changes account state, and the one nobody could smoke-test."""
+
+    def test_selection_is_a_put_not_a_get(self) -> None:
+        calls: list[tuple[str, dict[str, str], str]] = []
+
+        def fake_fetch(url: str, params: dict[str, str], *, method: str = "GET"):
+            calls.append((url, params, method))
+            return {"selected": ["Betclic PL", "STS PL"]}, {}
+
+        client = OddsApiIoClient(api_key="k123", fetch=fake_fetch)
+        client.select_bookmakers(["Betclic PL", "STS PL"])
+        url, params, method = calls[0]
+        assert method == "PUT"
+        assert url.endswith("/bookmakers/selected/select")
+        assert params["bookmakers"] == "Betclic PL,STS PL"
+        assert params["apiKey"] == "k123"
+
+    def test_reads_stay_gets(self) -> None:
+        calls: list[str] = []
+
+        def fake_fetch(url: str, params: dict[str, str], *, method: str = "GET"):
+            calls.append(method)
+            return [], {}
+
+        OddsApiIoClient(api_key="k", fetch=fake_fetch).list_bookmakers()
+        assert calls == ["GET"]

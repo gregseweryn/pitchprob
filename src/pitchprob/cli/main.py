@@ -1429,6 +1429,38 @@ def oddsio_books(
     typer.echo(f"{len(matches)} of {len(books)} bookmakers match {filter_text!r}")
 
 
+@oddsio_app.command("select")
+def oddsio_select(
+    books: Annotated[
+        str, typer.Option(help="Comma list of feed bookmaker names")
+    ] = "Betclic PL,STS PL",
+    show: Annotated[
+        bool, typer.Option("--show", help="Only print the current selection")
+    ] = False,
+) -> None:
+    """Attach bookmakers to your key (free tier: two).
+
+    Names must match the catalogue exactly — check with
+    `pitchprob oddsio books`. Run with --show first to see what is already
+    selected; re-running replaces the selection, it does not add to it.
+    """
+    from pitchprob.data.adapters.odds_api_io import scrub_http_error
+
+    configure_logging(get_settings().log_level)
+    client = _oddsio_client()
+    try:
+        if show:
+            typer.echo(f"currently selected: {client.selected_bookmakers()}")
+            return
+        chosen = [book.strip() for book in books.split(",") if book.strip()]
+        client.select_bookmakers(chosen)
+        typer.echo(f"selected: {', '.join(chosen)}")
+        typer.echo(f"confirmed by the API: {client.selected_bookmakers()}")
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        raise typer.Exit(code=1) from None
+
+
 @oddsio_app.command("probe")
 def oddsio_probe(
     event_id: Annotated[str, typer.Option(help="Feed event id")],

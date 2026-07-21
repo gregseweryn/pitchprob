@@ -71,7 +71,10 @@ _SELECTION_KEYS = {
     "ah": ("home", "away"),
 }
 
-FetchFn = Callable[[str, dict[str, str]], tuple[Any, dict[str, str]]]
+#: (url, params, *, method) -> (json payload, response headers). The method
+#: defaults to GET so every read call site stays a two-argument call; only
+#: the one state-changing endpoint passes PUT.
+FetchFn = Callable[..., tuple[Any, dict[str, str]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,11 +209,13 @@ def parse_movements(
     return ticks
 
 
-def _http_fetch(url: str, params: dict[str, str]) -> tuple[Any, dict[str, str]]:
+def _http_fetch(
+    url: str, params: dict[str, str], *, method: str = "GET"
+) -> tuple[Any, dict[str, str]]:
     # As with The Odds API: httpx logs full request URLs at INFO, and this
     # API's key rides in the query string.
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    response = httpx.get(url, params=params, timeout=30.0)
+    response = httpx.request(method, url, params=params, timeout=30.0)
     response.raise_for_status()
     payload: Any = response.json()
     return payload, dict(response.headers)
@@ -227,11 +232,24 @@ class OddsApiIoClient:
         payload, _ = self._fetch(f"{_BASE_URL}/bookmakers", {})
         return list(payload)
 
+    def selected_bookmakers(self) -> Any:
+        """The books currently attached to this key."""
+        payload, _ = self._fetch(
+            f"{_BASE_URL}/bookmakers/selected", {"apiKey": self._api_key}
+        )
+        return payload
+
     def select_bookmakers(self, bookmakers: list[str]) -> Any:
-        """Choose the two books the free tier allows."""
+        """Choose the books the plan allows (free tier: two).
+
+        The only call in this adapter that changes account state, and a
+        **PUT** — sending a GET here returns 405, which is exactly what the
+        first version did, because fixtures cannot catch a wrong verb.
+        """
         payload, _ = self._fetch(
             f"{_BASE_URL}/bookmakers/selected/select",
             {"apiKey": self._api_key, "bookmakers": ",".join(bookmakers)},
+            method="PUT",
         )
         return payload
 

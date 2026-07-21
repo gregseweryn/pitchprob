@@ -90,6 +90,19 @@ Never extend the map speculatively. It grows from real unmatched reports
 only, exactly like the Understat and API-Football maps did — a name added
 "just in case" is a guess wearing a mapping's clothes.
 
+## Attaching the odds-api.io feed (one-off)
+
+1. Sign up at odds-api.io, copy the key.
+2. Add to `.env` (gitignored — never commit it):
+   `PITCHPROB_ODDS_API_IO_KEY=<key>`
+3. `uv run pitchprob oddsio select --show` — what the key currently has.
+4. `uv run pitchprob oddsio select --books "Betclic PL,STS PL"` — names must
+   match `pitchprob oddsio books` exactly; re-running **replaces** the
+   selection rather than adding to it.
+
+Until quote-check clears the feed, its prices render UNVERIFIED and manual
+entry stays ground truth (ADR 0014).
+
 ## Monthly
 
 - API credits: printed by every recorder run in the Actions logs; the tape
