@@ -18,8 +18,8 @@ OU/AH multi-market betting, block-bootstrap CIs, `pitchprob experiment
 run|compare` registry with paired significance). Data: 21,589 matches (top-5
 European leagues 2014/15–2025/26, football-data.co.uk; Pinnacle close covers
 20,733 and open 20,717 of them), 99.98% Understat xG coverage, 40,500
-API-Football injury records (seasons 2022–24). ~340 tests, mypy --strict,
-10 ADRs in `docs/adr/` (read them before changing anything they cover).
+API-Football injury records (seasons 2022–24). ~570 tests, mypy --strict,
+14 ADRs in `docs/adr/` (read them before changing anything they cover).
 
 The syndicate-transformation roadmap (approved 2026-07-18, plan file
 `~/.claude/plans/you-are-a-principal-proud-patterson.md`) continues: Phase 1
@@ -85,6 +85,12 @@ uv run pitchprob ingest|xg|injuries|train|predict|backtest|coupon|experiment --h
 uv run pitchprob backtest --at open --markets 1x2,ou,ah   # syndicate clock
 uv run pitchprob experiment compare ... --vs ablate=absences  # paired A/B
 uv run pitchprob record-odds --league all   # daily odds tape (ADR 0012, ~15 credits)
+uv run pitchprob scan "arsenal" --market ou --selection over --line 3.0 \
+    --quote betclic:2.10 --tax-free betclic   # PL scanner (ADR 0013)
+uv run pitchprob pick log|settle|list        # forward real-money CLV ledger
+uv run pitchprob record-corners --league E0  # corners tape, T-26h (ADR 0014)
+uv run pitchprob study latency               # who copies the sharp line last
+uv run pitchprob quote-check log|report      # validate the odds-api.io feed
 cd frontend && npm run dev               # dashboard against local API
 ```
 
@@ -106,33 +112,91 @@ cd frontend && npm run dev               # dashboard against local API
   in `.env` (`PITCHPROB_API_FOOTBALL_KEY`, gitignored — never commit).
 - Frontend fonts via the `geist` npm package (no build-time Google fetch).
 
-## Handoff — state and next task (updated 2026-07-19)
+## Handoff — state and next task (updated 2026-07-21)
 
 **Operational now:** the odds tape records itself daily via GitHub Actions
 (`.github/workflows/record-odds.yml`, 08:00 UTC, commits
-`data/tape/*.csv.gz`; merge locally with `pitchprob import-tape`). API key in
-repo secrets + local `.env`. CI on push (`ci.yml`). Full stack in Docker
-(`make stack-up`, dashboard :3000); M7 results synced into the Postgres
-backtests table so the dashboard shows them.
+`data/tape/*.csv.gz`; merge locally with `pitchprob import-tape`). The
+corners pilot rides alongside (`record-corners.yml`, 20:00 UTC, E0 only).
+API key in repo secrets + local `.env`. CI on push (`ci.yml`), now including
+the frontend's vitest suite. Full stack in Docker (`make stack-up`,
+dashboard :3000); M7 results synced into the Postgres backtests table so the
+dashboard shows them.
 
-**Next task: the forward pick ledger + PL value scanner** (Phase 5 part 3) —
-one workflow: (a) `picks` table + CLI: operator logs each real bet (match,
-market/selection, stake 2-5 PLN, the PL bookmaker used and the *executed PL
-price*, optionally prices seen at other PL books), system auto-fills
-realized settlement from results and CLV vs Pinnacle close from the tape;
-(b) **scanner**: operator enters the PL odds he sees for upcoming fixtures
-and the system verdicts each one against the *live Pinnacle fair from the
-tape* (primary — the sharp anchor is the edge thesis, per the Phase 0-2a
-verdicts the model does NOT outpredict the market) and the model fair
-(secondary), i.e. "graj/nie graj + o ile". The scanner MUST compare
-*effective* odds per book: quoted × 0.88 for taxed PL books, × 1.0 under
-tax-free promos (Betclic "Gra bez podatku 2.0": first 1,000 PLN of stakes
-unconditionally tax-free ≈ +13.6% on effective odds — the operator's whole
-2-5 PLN measurement season fits inside it, making Betclic singles the
-default venue; after 1,000 PLN a ≥50%-AKO condition applies). Expect mostly
-"no bet" elsewhere — the 12% tax sits in the prices; value appears in
-boosts/promos and slow-moving PL prices vs a moved sharp line. After that: Phase 3 risk layer
-(flat 2-5 PLN stakes, notional 500 PLN bankroll — parameters agreed).
+**Git state:** five sessions of work were committed on 2026-07-21 in five
+grouped commits — dashboard/A6, audit fixes A1–A5/A7/A10, ADR 0013
+(ledger + scanner), ADR 0014 (corners + latency map + PL feed), docs.
+Nothing is pushed; `origin/main` is still at `8fe89e8`.
+
+**Audit 2026-07 findings closed:** A1 (absence passthrough — the M5 null
+now needs a rerun to mean anything), A2 (early-snapshot terminology),
+A3 (`value_analysis` on the betting path), A4 (API-key scrubbing),
+A5 (`clv_sharp` in `experiment compare`), **A6 (sharp CLV + bootstrap CIs
+on the dashboard's backtests page — done, no longer open)**, A7 (odds
+composite index), A9 (README counters), A10 (SHA-pinned actions +
+least-privilege permissions). **A8 (Shin vectorisation) is still open** and
+remains a performance item, not a correctness one.
+
+**Phase 5 part 3 is built (ADR 0013)** — the measurement instrument for
+2026/27 is ready and green (`make check`):
+
+- `betting/effective.py` — effective prices (×0.88 taxed, ×1.0 tax-free) and
+  the **promo-EV engine**: `promo_ev` prices a quote bare-and-taxed vs with
+  its promo (tax-free / boosted price / payout haircut for conditioned
+  winnings), so `promo_value` is the EV the promotion itself contributes.
+  `TaxFreeAllowance` tracks Betclic's 1,000 PLN tax-free turnover; a stake
+  that straddles the limit counts as taxed (a coupon can't be split).
+- `services/tape.py` — read-model over `odds_ticks`: `fair_at` returns the
+  latest **complete** Shin-de-margined Pinnacle market at or before an
+  instant (no lookahead, ever), `closing_fair` stops strictly before
+  kickoff, and every quote carries `observed_at` (freshness is payload).
+- `services/ledger.py` + `picks` table (migration `e3a5c7d9f1b2`) —
+  `log_pick` auto-fills the sharp anchor at bet time; `auto_settle` joins
+  tape naming → canonical `matches` (±1 day) and **lists unmatched picks
+  rather than guessing**; `attach_clv` fills both labels per bet.
+- `services/scanner.py` + `pitchprob scan` — "graj/nie graj + o ile" vs the
+  tape's Pinnacle fair (primary; model fair only informational, never flips
+  a verdict). NO ANCHOR on line mismatch, STALE when the anchor is >30h old.
+- CLI: `pitchprob scan`, `pitchprob pick log|settle|list`.
+
+**Audit follow-ups done (ADR 0014, 2026-07-21)** — all three verified
+against the live APIs before being built, and two audit assumptions did not
+survive:
+
+- **Corners are on the tape.** `pitchprob record-corners` (E0 pilot, 26h
+  window, `record-corners.yml` at 20:00 UTC) — ~43 of 500 monthly credits,
+  with a `--reserve` guard so it can never starve the main tape. Measured:
+  Pinnacle prices corners ~24h out, nothing at 3 days, and empty responses
+  are billed zero. Cards excluded (separate credit, audit P2).
+- **The line-latency map exists but has no data yet.** The audit's "already
+  measurable from the existing tape" was **wrong**: one snapshot, zero PL
+  books in The Odds API, and a daily cadence that quantises delay to 24h.
+  `evaluation/latency.py` + `pitchprob study latency` are source-agnostic
+  and currently print "No measurement" plus the failed precondition. The
+  audit doc carries a correction, pinned by `tests/test_docs.py`.
+- **odds-api.io prototype.** Six PL books in its catalogue (Betclic PL, STS
+  PL, eFortuna PL, Betfan PL, LVbet PL, Superbet), no Pinnacle, and
+  `/odds/movements` gives timestamped history — the real fuel for the
+  latency map. Wired as informational only: `quote-check log|report`
+  validates it against the operator's screen (bar fixed in advance: ≥30
+  checks, ≥95% agreement within 0.02, ≤10% missing/stale), and
+  `scan --feed` returns **UNVERIFIED** where it would say PLAY.
+
+**Blocked on you:** sign up at odds-api.io, put `PITCHPROB_ODDS_API_IO_KEY`
+in `.env` + repo secrets, and select Betclic PL + STS PL via
+`/bookmakers/selected/select`. Until then the feed and the latency map have
+no data; everything else runs.
+
+**Next task: Phase 3 risk layer** (flat 2-5 PLN stakes, notional 500 PLN
+bankroll — parameters agreed): exposure limits, drawdown circuit breaker,
+and the weekly "what the tape says" report off the ledger. Three smaller
+follow-ups worth doing alongside: (a) frontend views for the scanner and
+ledger (audit Etap 7 lists them; the dashboard still shows neither, though
+A6's sharp-CLV + CI columns on the backtests page are now in); (b) extend
+`_ODDS_API_OVERRIDES` in `data/normalize.py` from the first real
+"unmatched" reports once the season starts; (c) rerun the M5 absence A/B
+now that A1 is fixed — the published null is currently unsupported either
+way, and it is gating a spend decision.
 
 **User context:** Polish operator — PL-licensed books only, communicates in
 Polish (docs/code stay English). See the memory directory for details.

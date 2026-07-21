@@ -17,13 +17,16 @@ benchmarked against the closing line.
 
 - **Data**: 21,589 matches across the top-5 European leagues (EPL, La Liga, Bundesliga,
   Serie A, Ligue 1), seasons 2014/15–2025/26, ingested from football-data.co.uk with
-  bet365/Pinnacle/market-max/market-avg odds (opening + closing where published) —
+  bet365/Pinnacle/market-max/market-avg odds (early snapshot + closing where published) —
   ~1M odds quotes, zero silently dropped rows (hard failures are quarantined with
   reasons).
 - **Models**: Dixon-Coles (time-decay weighted MLE with analytic gradients), independent
   Poisson (the baseline DC must beat), and Elo with an ordered-logit 1X2 mapping.
 - **M2 ML layer**: per-match xG from Understat (99.98% coverage via the
-  ``getLeagueData`` JSON API), a leakage-free streaming feature builder (rolling
+  ``getLeagueData`` JSON API; raw responses are archived append-only under
+  `data/understat/` — since the January 2026 FBref/Opta cutoff Understat is
+  the only free xG source, so the raw material is snapshotted, not just
+  cached), a leakage-free streaming feature builder (rolling
   goals/xG/shots/corners form, venue splits, rest days), an XGBoost 1X2 model with
   temporal-holdout early stopping, temperature/isotonic calibration, and a stacking
   ensemble (log-linear pool + per-class bias, ridge-fit on a temporal holdout). The
@@ -68,7 +71,7 @@ uv run pitchprob predict --league E0 --home "Manchester City" --away "Chelsea" \
     --odds 1.55,4.4,5.9
 uv run pitchprob backtest --league E0 --start 2021-08-01
 make serve                      # FastAPI on :8000, OpenAPI docs at /docs
-make check                      # ruff + mypy --strict + 343 tests
+make check                      # ruff + mypy --strict + 568 tests
 ```
 
 Example output (real run, July 2026):
@@ -81,8 +84,8 @@ expected goals: 2.11 - 0.98
   dixon_coles       62.7%  21.6%  15.8%
   elo               68.2%  18.8%  13.0%
 ...
-Value vs offered odds (quarter-Kelly):
-  home  price 1.55  fair 1.60  Expected value -0.029  kelly 0.000
+Value vs offered odds (Dixon-Coles + Shin market blend, quarter-Kelly):
+  home  price 1.55  fair 1.59  Expected value -0.027  kelly 0.000
 ```
 
 Negative EV at realistic prices is the *correct* answer most of the time.
@@ -175,24 +178,47 @@ semantics (0 = covered and none listed, NaN = no coverage). A/B on
 identical data — GBM, E0, walk-forward 2023-08 → 2025-06, 760 predictions,
 only the ablation differing:
 
-| | log-loss | RPS | flat ROI |
-|---|---|---|---|
-| absences active | 0.9639 | 0.19721 | −7.8% |
-| absences ablated | 0.9643 | 0.19719 | −6.3% |
+| | log-loss | RPS | flat ROI (close) | flat ROI (early) |
+|---|---|---|---|---|
+| absences active | 0.96326 | 0.19718 | −8.9% | −6.9% |
+| absences ablated | 0.96431 | 0.19719 | −6.3% | −8.8% |
 
-**Null.** Identical to the third decimal; the tiny differences are noise.
+**Null.** Paired block bootstrap by ISO week: log-loss delta −0.0011
+(p=0.71), RPS delta −0.00001 (p=0.99), ROI delta null on both simulation
+clocks (close p=0.31, early p=0.38), and the paired mean-CLV delta null
+(early clock p=0.17) — nothing clears its 95% interval. Sharp CLV (the ADR
+0011 primary endpoint) is deeply negative in *both* arms and barely moves
+with absences (early clock: −5.4% active vs −5.6% ablated), consistent with
+M7's finding that the
+selector's bets lose to the closing line irrespective of team-news features.
 The market already prices team news, and results-based ratings absorb
-absence effects implicitly. Consequences drawn: no API-Football paid
-upgrade (live absence counts can't earn a subscription their historical
-counterpart earns nothing from), and no LLM news-scoring layer (if
-machine-readable absence lists add zero, LLM-scored press conferences — a
-noisier proxy for the same information — start from a weaker position).
-Caveats stated: counts are crude (a star and a reserve weigh the same),
-one league, and possibly post-hoc-edited source lists — which would bias
-*toward* finding value, strengthening the null.
+absence effects implicitly.
+Consequences drawn: no API-Football paid upgrade (live absence counts can't
+earn a subscription their historical counterpart earns nothing from), and no
+LLM news-scoring layer (if machine-readable absence lists add zero,
+LLM-scored press conferences — a noisier proxy for the same information —
+start from a weaker position). Caveats stated: counts are crude (a star and
+a reserve weigh the same), one league, and possibly post-hoc-edited source
+lists — which would bias *toward* finding value, strengthening the null.
 
-Reproduce with: `uv run pitchprob backtest --league E0 --start 2023-08-01
---end 2025-06-30 --model gbm --refit-days 28 [--ablate absences]`.
+**Methodological correction (2026-07-20).** The originally published table
+(active log-loss 0.9639) understated the test: the passthrough feature family
+(`absences_home/away`) was never delivered to the *prediction* row —
+`features_for` built it from history-derived state only, so every out-of-sample
+prediction silently saw NaN absences in both arms. The A/B therefore measured
+the *training-side* effect alone. The channel is now wired end to end
+(`features_for`/`match_probabilities_at` take the passthrough values;
+`default_predict` forwards them from the evaluation row), with a train/serve
+parity test covering the passthrough column so it cannot regress. Re-running
+with absences genuinely reaching the booster moved only the active arm
+(0.9639 → 0.9633); the ablated arm is unchanged to the digit (0.9643), which
+is exactly the fingerprint of the fix — and the verdict still holds. The
+correction strengthens the null rather than weakening it: the feature now had
+its full opportunity to matter, at train *and* serve time, and did not.
+
+Reproduce with: `uv run pitchprob experiment compare --league E0
+--start 2023-08-01 --end 2025-06-30 --model gbm --refit-days 28
+--vs ablate=absences` (add `--at open` for the syndicate-clock row).
 
 ### M7: the inference engine and true CLV (ADR 0010)
 
@@ -200,26 +226,39 @@ An audit against professional-syndicate practice found that the previously
 reported "CLV" had no timing dimension: both its legs (settlement price and
 fair probability) came from the closing snapshot, so it measured cross-book
 price dispersion at the close, not "did the market move toward our price
-after we bet". Meanwhile ~1M stored odds quotes — opening prices for four
-books across 1X2, OU 2.5 and Asian handicap — were never used.
+after we bet". Meanwhile ~1M stored odds quotes — early-snapshot prices for
+four books across 1X2, OU 2.5 and Asian handicap — were never used.
+
+> **Naming caveat (audit 2026-07-20):** what this README, the CLI flag
+> `--at open` and the stored metrics call the "open" is **not the market
+> open**. football-data.co.uk collects its non-closing quotes on Friday
+> afternoons (weekend fixtures) and Tuesday afternoons (midweek) — a late
+> pre-match **early snapshot**, roughly T-3 to T-1 before kickoff. The prose
+> below says "early snapshot"; the flag and metric names keep "open" for
+> compatibility with stored runs. The negative true-CLV verdicts are
+> *conservative* under this correction: the measured early→close window is
+> shorter than a true open→close window, so the market's move against these
+> bets is understated, not overstated. No claim in this project refers to
+> the true market open.
 
 M7 rebuilt the evaluation loop around them, changing **no model**:
 
 - **Two simulation clocks.** `--at close` reproduces the legacy protocol
   bit-for-bit (regression-pinned to every published digit above). `--at open`
-  bets the opening snapshot only — opening prices, opening anchor — and
-  measures **true CLV = opening price × Shin(closing fair) − 1**.
+  bets the early snapshot only — early prices, early anchor — and
+  measures **true CLV = early-snapshot price × Shin(closing fair) − 1**.
 - **The beatable benchmark, measured for the first time**: on the E0 subset
-  (n=1,730) the Pinnacle *opening* line scores log-loss **0.95018** vs the
-  close's 0.94640. Dixon-Coles at 0.97248 (28d refits) is +2.3% behind the
-  open vs +2.7% behind the close. The open is the weaker target, but only by
-  ~0.4pp — no free lunch, and now the right gap is on the record.
+  (n=1,730) the Pinnacle *early-snapshot* line scores log-loss **0.95018**
+  vs the close's 0.94640. Dixon-Coles at 0.97248 (28d refits) is +2.3%
+  behind the early snapshot vs +2.7% behind the close. The early snapshot is
+  the weaker target, but only by ~0.4pp — no free lunch, and now the right
+  gap is on the record.
 - **OU 2.5 and Asian handicap betting** from the same score matrix, priced at
-  the quoted opening line inside the walk-forward loop; realized settlement
-  (incl. quarter-line split stakes) is property-tested to agree
+  the quoted early-snapshot line inside the walk-forward loop; realized
+  settlement (incl. quarter-line split stakes) is property-tested to agree
   cell-for-cell with the probability-side markets module. AH CLV exists only
-  where the closing line still matches the opening line (~57% of matches on
-  a 2025 E0 sample; coverage is reported, not hidden).
+  where the closing line still matches the early-snapshot line (~57% of
+  matches on a 2025 E0 sample; coverage is reported, not hidden).
 - **Honest inference, finally**: every staking block now carries
   block-bootstrap confidence intervals (ISO-week blocks — bets within a
   round are correlated and IID resampling would flatter them), delivering
@@ -234,9 +273,9 @@ M7 rebuilt the evaluation loop around them, changing **no model**:
 #### The first five-league, three-market, true-CLV baseline (and its verdict)
 
 Dixon-Coles, weekly refits, 2021-08 → 2026-05, blended selector (w=0.4, cap
-8.0, EV > 3%) betting 1X2 + OU 2.5 + AH at opening best prices:
+8.0, EV > 3%) betting 1X2 + OU 2.5 + AH at early-snapshot best prices:
 
-| league | preds | model LL | open LL | close LL | bets | ROI (95% CI) | true CLV (95% CI) | p(CLV) |
+| league | preds | model LL | early LL | close LL | bets | ROI (95% CI) | true CLV (95% CI) | p(CLV) |
 |---|---|---|---|---|---|---|---|---|
 | E0 | 1,900 | 0.9755 | 0.9502 | 0.9464 | 2,888 | −3.2% (−8.8, +2.2) | **−0.76%** (−1.12, −0.38) | .0005 |
 | SP1 | 1,900 | 0.9828 | 0.9639 | 0.9630 | 2,644 | −5.3% (−11.5, +1.1) | **−1.28%** (−1.68, −0.86) | .0005 |
@@ -246,14 +285,15 @@ Dixon-Coles, weekly refits, 2021-08 → 2026-05, blended selector (w=0.4, cap
 
 Three honest findings, in decreasing order of comfort:
 
-1. **The beatable target is measured.** The opening line is 0.02pp (F1) to
-   0.4pp (E0) softer than the close in log-loss; the model sits 2.0–2.7%
-   behind the *open*. Ligue 1's line barely sharpens between open and close.
+1. **The beatable target is measured.** The early-snapshot line is 0.02pp
+   (F1) to 0.4pp (E0) softer than the close in log-loss; the model sits
+   2.0–2.7% behind the *early snapshot*. Ligue 1's line barely sharpens
+   between the early snapshot and the close.
 2. **The old "+1.3% CLV" was line-shopping value, not timing value.** Under
    the true clock the blended strategy's mean CLV is *significantly negative
    in every league*: the closing line systematically moves **against** its
-   bets. Where the model disagrees with the opening price, the market's
-   subsequent move sides with the market, on average. Any Phase 2 bet gate
+   bets. Where the model disagrees with the early-snapshot price, the
+   market's subsequent move sides with the market, on average. Any Phase 2 bet gate
    must find the minority of divergences the market later confirms — the
    aggregate says the default selector should not be betting early.
 3. **One number that is *not* a headline:** the naive selector shows +6.3%
@@ -269,10 +309,10 @@ Reproduce with: `uv run pitchprob experiment run --name phase0-open-blended-E0
 #### The movement study: does the line move toward the model? (a null that teaches)
 
 For every prediction with both books, compare three directions: the market's
-open→close movement `m`, the model's divergence from the open `d`, and the
-realized outcome's direction `t` (all as probability vectors; `m·d > 0`
-means the market moved toward the model). Dixon-Coles, 28-day refits,
-2021-08 → 2026-05:
+early→close movement `m`, the model's divergence from the early snapshot
+`d`, and the realized outcome's direction `t` (all as probability vectors;
+`m·d > 0` means the market moved toward the model). Dixon-Coles, 28-day
+refits, 2021-08 → 2026-05:
 
 | league | n | P(close moved toward truth) | P(moved toward model) | mean m·d (95% CI) | largest-divergence bucket |
 |---|---|---|---|---|---|
@@ -282,9 +322,9 @@ means the market moved toward the model). Dixon-Coles, 28-day refits,
 | I1 | 1,717 | 0.535 | 0.469 | −0.00010 (−.00033, +.00017) | +0.00011 |
 | F1 | 1,525 | 0.527 | 0.517 | +0.00007 (−.00017, +.00030) | +0.00034 |
 
-The sanity check passes — the close is sharper than the open everywhere. The
-verdict does not: **model-vs-open divergence is an error signal, not a steam
-signal.** The market does not follow Dixon-Coles anywhere; in Germany it
+The sanity check passes — the close is sharper than the early snapshot
+everywhere. The verdict does not: **model-vs-early-snapshot divergence is an
+error signal, not a steam signal.** The market does not follow Dixon-Coles anywhere; in Germany it
 significantly moves *against* it, and in E0/SP1/D1 the effect is worst
 exactly where the model disagrees most. This explains the negative true CLV
 above mechanistically, and it sets the honest prior for the meta-gate phase:
@@ -299,7 +339,8 @@ say. Reproduce with: `uv run pitchprob study movement --league E0 --start
 
 A second model (XGBoost regressor, walk-forward, 90-day refits, whitelisted
 bet-time features only) was trained to predict each candidate's **sharp CLV**
-— Pinnacle open price vs Pinnacle close fair, the timing-only label — and to
+— Pinnacle early-snapshot price vs Pinnacle close fair, the timing-only
+label — and to
 bet only candidates predicted above a buffer. Design and prespecified
 endpoints: `docs/superpowers/specs/2026-07-18-phase2-clv-meta-gate.md`.
 
@@ -335,6 +376,124 @@ Betfair exchange prices. Polish-licensed books are *not* carried by the API;
 executed PL prices will be captured in the forward pick ledger at bet time,
 and every real-money conclusion will be computed on those, not on EU best
 prices.
+
+#### The forward pick ledger and the PL value scanner (ADR 0013)
+
+The measurement instrument for 2026/27. Two commands, one thesis: after the
+Phase 0–2a nulls the model is not the edge, so the **sharp anchor is
+primary** — Shin-de-margined Pinnacle from the tape — and the model fair is
+informational only. Because Polish books collect a **12% turnover tax on the
+stake**, every comparison runs on *effective* prices (`quoted × 0.88`, or
+`× 1.0` under a tax-free promo). That tax is larger than any edge this
+project has ever measured, which is why "NO BET" is the expected output.
+
+```bash
+# Scanner: the operator types the PL prices he sees; the system verdicts them.
+uv run pitchprob scan "arsenal" --market ou --selection over --line 3.0 \
+    --quote betclic:2.10 --quote sts:2.05 --tax-free betclic
+```
+
+```
+Arsenal vs Coventry City — kickoff 2026-08-21 19:00 UTC (event eb2553d10d63dc912b99f8fd0d675721)
+ou 3.0 over | anchor: pinnacle 1.89 -> fair 50.0% | observed 2026-07-20 23:11 UTC (10h ago)
+PLAY       betclic     quoted 2.10  eff 2.10  edge   +5.0%  promo +12.6pp
+NO BET     sts         quoted 2.05  eff 1.80  edge   -9.8%
+```
+
+Same price, opposite verdicts: Betclic's "Gra bez podatku 2.0" (first 1,000
+PLN of stakes unconditionally tax-free) is worth +13.6% of payout — more
+than any model edge measured here, which is what makes it the default venue
+for a 2–5 PLN measurement season. Promotions are priced as **instruments**,
+not footnotes: `promo_ev` values a quote bare-and-taxed versus with its promo
+(tax-free, boosted price, payout haircut for conditioned winnings), so
+`promo_value` is the EV the promotion itself contributes.
+
+Two refusals are deliberate. A line the tape does not currently quote yields
+**NO ANCHOR**, never a comparison against a neighbouring line; and an anchor
+older than 30 hours downgrades PLAY to **STALE** — the tape snapshots daily,
+so freshness is payload, printed with every verdict, and a stale sharp line
+is a prompt to fix the recorder rather than a basis for a bet.
+
+```bash
+# Ledger: log the executed bet, settle it, watch CLV — the decision variable.
+uv run pitchprob pick log --match "arsenal" --market ou --selection over \
+    --line 3.0 --book betclic --stake 5 --price 2.10 --tax-free
+uv run pitchprob pick settle     # auto: results from `matches`, CLV from the tape
+uv run pitchprob pick list
+```
+
+Each pick carries the **two-label CLV decomposition** (the ADR 0011 design
+applied to real money): `clv_sharp` is the Pinnacle price at bet time versus
+the closing fair — timing alone, auto-filled from the tape at log time so it
+cannot be reconstructed favourably afterwards — while `clv_exec` uses the
+price actually executed after tax or promo. Their difference is the
+venue/shopping/promo component, which under the Phase 0–2a verdicts is the
+only place value can live. When the season ends, the ledger will say which
+one paid. Picks whose result cannot be matched are listed, never guessed;
+tax-free stakes beyond the 1,000 PLN allowance are refused rather than
+silently mispriced.
+
+#### Corners, the line-latency map, and a Polish quote feed (ADR 0014)
+
+Three audit follow-ups, each of which started by checking the claim against
+the live API rather than the documentation. Two of the three assumptions did
+not survive.
+
+**Corners are real, Pinnacle prices them, and they arrive late.** Measured
+2026-07-21: a fixture 31 days out returned nothing (and cost nothing —
+empty responses are not billed); a fixture ~24 hours out returned Pinnacle
+corner totals, corner handicaps and card totals. So the pilot records
+corners for E0 fixtures inside a 26-hour window, one snapshot each:
+
+```bash
+uv run pitchprob record-corners --league E0 --within-hours 26 --reserve 60
+```
+
+That is **~43 of the 500 monthly credits**, taken from the headroom the main
+tape leaves. Spending has two ceilings and both stops are printed, never
+silent: the recorder refuses to spend below `--reserve`, because the main
+1x2/ou/ah tape is the instrument the scanner and ledger anchor on, and an
+experiment does not get to starve what it will be measured against.
+
+**The latency map was not measurable from the existing tape — the audit was
+wrong about that, and the correction is in the audit document.** The tape
+held one snapshot; The Odds API carries no Polish-licensed bookmaker (the
+22 books visible include `betclic_fr` and `winamax_fr`, not one PL book);
+and a daily cadence quantises every delay to 24 hours when the phenomenon
+lives in minutes. The module was built anyway, source-agnostic, and on
+today's data it says so:
+
+```
+# Line-latency map — reference pinnacle, source (all)
+- Reference moves of >= 2.0%: 0
+- Resolution floor (median gap between reference snapshots): not defined
+
+## No measurement
+- the reference has only a single snapshot — a latency needs a series,
+  and one observation is not one
+```
+
+Three biases are closed by construction, because each would flatter the
+books: a bookmaker that never follows is *censored*, not fast, so the median
+delay is taken over reactions only and always printed beside the reaction
+rate; both sides are compared as de-margined probabilities, so widening a
+margin is not an opinion; and a book absent when the sharp moved has no
+baseline and leaves the denominator entirely.
+
+**odds-api.io carries six Polish books — and no Pinnacle.** Its public
+catalogue lists Betclic PL, STS PL, eFortuna PL, Betfan PL, LVbet PL and
+Superbet as active, so it is a source of *followers*; the sharp anchor stays
+Pinnacle from the main tape. Its `/odds/movements` endpoint returns
+timestamped price histories, which is what will eventually make the latency
+map say something.
+
+The feed is wired in as **informational only**. `pitchprob quote-check log`
+records what the operator sees on the bookmaker's own screen against what
+the feed claimed at that instant, and a book is promoted only on a bar fixed
+before any data existed: ≥30 checks, ≥95% agreement within 0.02, ≤10%
+missing-or-stale. Until then `pitchprob scan --feed` returns **UNVERIFIED**
+where it would otherwise say PLAY — the edge is still computed, because the
+lead is real; the authorisation is not.
 
 ### M2 results: does the ML layer help? (same protocol, 28-day refits)
 
@@ -384,12 +543,12 @@ src/pitchprob/
 
 Postgres 16 is the system of record (long-format odds/predictions, ADR 0003) with
 Alembic migrations; the code is dialect-portable and runs unmodified on SQLite for
-zero-dependency development. See `docs/adr/` for the ten architecture decision
+zero-dependency development. See `docs/adr/` for the 14 architecture decision
 records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing
 
-343 tests: hand-computed reference values for every formula, hypothesis property tests
+568 tests: hand-computed reference values for every formula, hypothesis property tests
 (market partitions sum to 1, quarter-line AH EV ≡ mean of adjacent half lines, Shin
 books renormalize, realized settlement ≡ the probability-side markets module
 cell-for-cell, block-bootstrap scale equivariance), analytic-vs-numeric gradient
@@ -411,7 +570,7 @@ make test-int    # Postgres integration tests (needs make db-up)
 | **M4 ✓** | Next.js dashboard: market books, coupon builder, backtest history |
 | **M5 ✓** | Availability experiment (API-Football free tier): 40.5k injury records, measured verdict below |
 | **M6 ✓** | Two production images + compose stack profile + CI (ADR 0009) |
-| **M7 ✓** | Inference engine: true CLV at the open, OU/AH betting, block-bootstrap CIs, experiment registry (ADR 0010) |
+| **M7 ✓** | Inference engine: true CLV at the early snapshot, OU/AH betting, block-bootstrap CIs, experiment registry (ADR 0010) |
 
 ## Deployment (M6, ADR 0009)
 
