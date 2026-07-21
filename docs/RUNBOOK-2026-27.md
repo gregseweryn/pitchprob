@@ -41,6 +41,22 @@ would otherwise serve August forever. Past seasons stay cached — they
 never change, and WSL's TLS flakes (see CLAUDE.md quirks) make every
 avoided download a good download.
 
+## Opening the app
+
+Double-click `scripts/pitchprob.bat` (copy it to the Desktop or pin it to
+the taskbar). It runs the freshness gate, starts the API and the dashboard,
+and opens the browser at http://localhost:3000. Closing the console window
+stops both servers.
+
+Nothing is hosted: the app runs on the operator's machine and reads the
+**cloud** database, so the data it shows stayed current while the machine
+was off. There is no server to pay for and nothing exposed to the internet.
+
+From the browser: `/scanner` verdicts a price, `/ledger` logs the bet and
+shows the CLV decomposition. Both hit the same services as the CLI — the
+risk layer runs server-side, so a bet the command line would refuse is
+refused in the browser too, with the limit named.
+
 ## Before every betting session
 
 ```bash

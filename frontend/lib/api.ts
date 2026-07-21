@@ -296,6 +296,52 @@ export async function postScan(request: {
   );
 }
 
+export type PickRequest = {
+  home_team: string;
+  away_team: string;
+  kickoff_utc: string;
+  market: string;
+  selection: string;
+  bookmaker: string;
+  stake_pln: Money;
+  price_quoted: Money;
+  line?: Money | null;
+  tax_free?: boolean;
+  event_id?: string | null;
+  notes?: string | null;
+  override_risk?: boolean;
+};
+
+/** A refusal that carries which kind it was. 409 = the ledger's state
+ * forbids this bet (a limit, the breaker) — a decision to accept or
+ * override. 400 = the bet is malformed — fix the form. Collapsing the two
+ * into one "error" would leave the operator unable to tell which. */
+export class PickRefused extends Error {
+  constructor(
+    message: string,
+    readonly kind: "limit" | "invalid",
+  ) {
+    super(message);
+    this.name = "PickRefused";
+  }
+}
+
+export async function postPick(request: PickRequest): Promise<Pick> {
+  const response = await fetch(`${API_URL}/v1/ledger/picks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (response.status === 409 || response.status === 400) {
+    const body = await response.json().catch(() => ({}));
+    throw new PickRefused(
+      typeof body.detail === "string" ? body.detail : "Refused.",
+      response.status === 409 ? "limit" : "invalid",
+    );
+  }
+  return handle(response);
+}
+
 export async function getLedger(): Promise<LedgerResponse> {
   return handle(await fetch(`${API_URL}/v1/ledger`, { cache: "no-store" }));
 }

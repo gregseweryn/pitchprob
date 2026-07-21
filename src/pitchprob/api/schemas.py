@@ -175,6 +175,30 @@ class PickOut(BaseModel):
     risk_note: str | None
 
 
+class PickRequest(BaseModel):
+    """One executed bet, as the dashboard submits it.
+
+    Deliberately mirrors `pitchprob pick log`: the browser is a second front
+    door to the same ledger, never a looser one. The risk layer runs
+    server-side, so `override_risk` here costs exactly what it costs at the
+    command line — a permanent mark on the pick.
+    """
+
+    home_team: str = Field(min_length=1, max_length=64)
+    away_team: str = Field(min_length=1, max_length=64)
+    kickoff_utc: datetime
+    market: Literal["1x2", "ou", "ah", "corners_ou", "corners_ah"]
+    selection: str = Field(min_length=1, max_length=16)
+    bookmaker: str = Field(min_length=1, max_length=32)
+    stake_pln: Decimal = Field(gt=0)
+    price_quoted: Decimal = Field(gt=1)
+    line: Decimal | None = None
+    tax_free: bool = False
+    event_id: str | None = None
+    notes: str | None = Field(default=None, max_length=256)
+    override_risk: bool = False
+
+
 class LedgerResponse(BaseModel):
     picks: list[PickOut]
     summary: dict[str, Any]

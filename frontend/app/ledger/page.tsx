@@ -7,6 +7,7 @@
 
 import { getLedger } from "@/lib/api";
 import { Caveats, ErrorBanner, Panel, StatList } from "@/components/ui";
+import { LogPickForm } from "@/app/ledger/log-pick";
 import {
   ageLabel,
   ciRange,
@@ -376,6 +377,8 @@ export default async function LedgerPage() {
       <Panel title="Risk layer">
         <RiskBlock weekly={weekly} />
       </Panel>
+
+      <LogPickForm />
 
       {picks.length > 0 ? (
         <Panel

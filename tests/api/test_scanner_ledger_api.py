@@ -256,3 +256,111 @@ class TestLedger:
         joined = " ".join(client.get("/v1/ledger").json()["caveats"])
         assert "decision variable" in joined
         assert "clv_sharp before clv_exec" in joined
+
+
+class TestLogPickEndpoint:
+    """Logging a bet from the browser.
+
+    The load-bearing property: the risk layer binds here exactly as it does
+    in the CLI. If the endpoint could write a pick the CLI would refuse,
+    the dashboard would be a way around the project's own safeguards —
+    worse than having no dashboard.
+    """
+
+    def _body(self, **overrides):
+        body = {
+            "home_team": "Arsenal",
+            "away_team": "Coventry City",
+            "kickoff_utc": _KICKOFF.isoformat(),
+            "market": "ou",
+            "selection": "over",
+            "line": "3.0",
+            "bookmaker": "betclic",
+            "stake_pln": "5",
+            "price_quoted": "2.10",
+            "tax_free": True,
+            "event_id": "ev1",
+        }
+        body.update(overrides)
+        return body
+
+    def test_a_clean_pick_is_stored_with_its_sharp_anchor(
+        self, client: TestClient, session: Session
+    ) -> None:
+        _seed_symmetric_totals(session)
+        response = client.post("/v1/ledger/picks", json=self._body())
+        assert response.status_code == 201, response.text
+        pick = response.json()
+        assert Decimal(pick["price_effective"]) == Decimal("2.10")
+        assert Decimal(pick["price_sharp"]) == Decimal("1.890")
+        assert pick["risk_override"] is False
+        assert client.get("/v1/ledger").json()["summary"]["n_picks"] == 1
+
+    def test_a_second_bet_on_the_same_fixture_is_refused_with_the_reason(
+        self, client: TestClient, session: Session
+    ) -> None:
+        _seed_symmetric_totals(session)
+        assert client.post("/v1/ledger/picks", json=self._body()).status_code == 201
+        clash = client.post(
+            "/v1/ledger/picks",
+            json=self._body(market="1x2", selection="home", line=None),
+        )
+        # 409, not 400: the request is well-formed, the ledger's state
+        # forbids it — and the operator needs to know *which* limit.
+        assert clash.status_code == 409
+        assert "max_match_stake" in clash.json()["detail"]
+
+    def test_the_refused_bet_leaves_no_row(
+        self, client: TestClient, session: Session
+    ) -> None:
+        _seed_symmetric_totals(session)
+        client.post("/v1/ledger/picks", json=self._body())
+        client.post(
+            "/v1/ledger/picks",
+            json=self._body(market="1x2", selection="home", line=None),
+        )
+        assert client.get("/v1/ledger").json()["summary"]["n_picks"] == 1
+
+    def test_a_stake_outside_the_band_is_refused(
+        self, client: TestClient, session: Session
+    ) -> None:
+        _seed_symmetric_totals(session)
+        response = client.post("/v1/ledger/picks", json=self._body(stake_pln="50"))
+        assert response.status_code == 409
+        assert "max_stake" in response.json()["detail"]
+
+    def test_an_override_is_stored_and_marked(
+        self, client: TestClient, session: Session
+    ) -> None:
+        _seed_symmetric_totals(session)
+        response = client.post(
+            "/v1/ledger/picks", json=self._body(stake_pln="50", override_risk=True)
+        )
+        assert response.status_code == 201
+        pick = response.json()
+        assert pick["risk_override"] is True
+        assert pick["risk_note"] is not None and "max_stake" in pick["risk_note"]
+
+    def test_a_malformed_bet_is_a_400_not_a_409(
+        self, client: TestClient, session: Session
+    ) -> None:
+        """Wrong selection for the market is the caller's mistake, not a
+        limit — the two must not be confused, or the UI cannot tell the
+        operator whether to fix the form or accept the refusal."""
+        _seed_symmetric_totals(session)
+        response = client.post(
+            "/v1/ledger/picks", json=self._body(selection="home")
+        )
+        assert response.status_code == 400
+
+    def test_the_tax_free_allowance_still_guards(
+        self, client: TestClient, session: Session
+    ) -> None:
+        _seed_symmetric_totals(session)
+        client.post(
+            "/v1/ledger/picks",
+            json=self._body(stake_pln="998", override_risk=True),
+        )
+        response = client.post("/v1/ledger/picks", json=self._body())
+        assert response.status_code == 400
+        assert "allowance" in response.json()["detail"]

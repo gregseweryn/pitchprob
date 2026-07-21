@@ -18,7 +18,7 @@ OU/AH multi-market betting, block-bootstrap CIs, `pitchprob experiment
 run|compare` registry with paired significance). Data: 21,589 matches (top-5
 European leagues 2014/15–2025/26, football-data.co.uk; Pinnacle close covers
 20,733 and open 20,717 of them), 99.98% Understat xG coverage, 40,500
-API-Football injury records (seasons 2022–24). ~650 tests, mypy --strict,
+API-Football injury records (seasons 2022–24). ~700 tests, mypy --strict,
 15 ADRs in `docs/adr/` (read them before changing anything they cover).
 
 The syndicate-transformation roadmap (approved 2026-07-18, plan file
@@ -93,7 +93,8 @@ uv run pitchprob study latency               # who copies the sharp line last
 uv run pitchprob quote-check log|report      # validate the odds-api.io feed
 uv run pitchprob risk status|report          # limits, breaker, weekly report
 uv run pitchprob status                      # pre-round freshness gate
-bash scripts/weekly-refresh.sh               # weekly ingest/xg/tape/settle loop
+bash scripts/start.sh                        # gate + API + dashboard + browser
+uv run pitchprob oddsio select --show        # which PL books the feed key has
 cd frontend && npm run dev               # dashboard against local API
 ```
 

@@ -19,6 +19,7 @@ from pitchprob.api.schemas import (
     LegOut,
     MatchOut,
     PickOut,
+    PickRequest,
     PredictionRequest,
     ScanRequest,
     ScanResponse,
@@ -26,11 +27,12 @@ from pitchprob.api.schemas import (
     VerdictOut,
 )
 from pitchprob.betting.effective import PromoTerms, effective_price
+from pitchprob.betting.risk import RiskRefusal
 from pitchprob.core.db import get_session_factory
 from pitchprob.core.errors import UnknownTeamError
 from pitchprob.data.orm import Backtest, League, Match, Pick, Season, Team, TeamAlias
 from pitchprob.services.coupons import INDEPENDENCE_CAVEAT, TIERS, generate_coupons
-from pitchprob.services.ledger import LEDGER_CAVEATS, ledger_summary
+from pitchprob.services.ledger import LEDGER_CAVEATS, ledger_summary, log_pick
 from pitchprob.services.prediction import build_market_book
 from pitchprob.services.risk_report import weekly_report
 from pitchprob.services.scanner import SCANNER_CAVEATS, OperatorQuote, scan
@@ -289,6 +291,74 @@ def scan_quotes(request: ScanRequest, db: Session = Depends(get_db)) -> ScanResp
     )
 
 
+def _pick_out(pick: Pick) -> PickOut:
+    return PickOut(
+        id=pick.id,
+        kickoff_utc=pick.kickoff_utc,
+        home_team=pick.home_team,
+        away_team=pick.away_team,
+        market=pick.market,
+        selection=pick.selection,
+        line=pick.line,
+        bookmaker=pick.bookmaker,
+        stake_pln=pick.stake_pln,
+        price_quoted=pick.price_quoted,
+        price_effective=pick.price_effective,
+        tax_free=pick.tax_free,
+        price_sharp=pick.price_sharp,
+        gross_return_pln=pick.gross_return_pln,
+        settled_at=pick.settled_at,
+        closing_observed_at=pick.closing_observed_at,
+        clv_exec=pick.clv_exec,
+        clv_sharp=pick.clv_sharp,
+        clv_shopping=(
+            pick.clv_exec - pick.clv_sharp
+            if pick.clv_exec is not None and pick.clv_sharp is not None
+            else None
+        ),
+        risk_override=pick.risk_override,
+        risk_note=pick.risk_note,
+    )
+
+
+@router.post("/ledger/picks", response_model=PickOut, status_code=201)
+def create_pick(request: PickRequest, db: Session = Depends(get_db)) -> PickOut:
+    """Record one executed real-money bet.
+
+    Two distinct refusals, and the UI needs to tell them apart:
+    **400** means the bet is malformed or breaks the tax-free allowance —
+    fix the form. **409** means the bet is fine but the ledger's state
+    forbids it (an exposure limit, or the drawdown breaker) — that is a
+    decision, not a typo, and overriding it is a deliberate act that marks
+    the pick.
+    """
+    try:
+        pick = log_pick(
+            db,
+            home_team=request.home_team,
+            away_team=request.away_team,
+            kickoff_utc=request.kickoff_utc,
+            market=request.market,
+            selection=request.selection,
+            line=request.line,
+            bookmaker=request.bookmaker,
+            stake_pln=request.stake_pln,
+            price_quoted=request.price_quoted,
+            tax_free=request.tax_free,
+            event_id=request.event_id,
+            notes=request.notes,
+            override_risk=request.override_risk,
+        )
+    except RiskRefusal as exc:
+        # Checked before ValueError: RiskRefusal subclasses it, and the two
+        # carry opposite instructions for the operator.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    return _pick_out(pick)
+
+
 @router.get("/ledger", response_model=LedgerResponse)
 def read_ledger(db: Session = Depends(get_db)) -> LedgerResponse:
     """Every real-money pick, the CLV decomposition, and the week's report."""
@@ -298,36 +368,7 @@ def read_ledger(db: Session = Depends(get_db)) -> LedgerResponse:
         .all()
     )
     return LedgerResponse(
-        picks=[
-            PickOut(
-                id=pick.id,
-                kickoff_utc=pick.kickoff_utc,
-                home_team=pick.home_team,
-                away_team=pick.away_team,
-                market=pick.market,
-                selection=pick.selection,
-                line=pick.line,
-                bookmaker=pick.bookmaker,
-                stake_pln=pick.stake_pln,
-                price_quoted=pick.price_quoted,
-                price_effective=pick.price_effective,
-                tax_free=pick.tax_free,
-                price_sharp=pick.price_sharp,
-                gross_return_pln=pick.gross_return_pln,
-                settled_at=pick.settled_at,
-                closing_observed_at=pick.closing_observed_at,
-                clv_exec=pick.clv_exec,
-                clv_sharp=pick.clv_sharp,
-                clv_shopping=(
-                    pick.clv_exec - pick.clv_sharp
-                    if pick.clv_exec is not None and pick.clv_sharp is not None
-                    else None
-                ),
-                risk_override=pick.risk_override,
-                risk_note=pick.risk_note,
-            )
-            for pick in picks
-        ],
+        picks=[_pick_out(pick) for pick in picks],
         summary=ledger_summary(db),
         weekly=weekly_report(db, now=datetime.now(tz=UTC)).metrics,
         caveats=list(LEDGER_CAVEATS),
