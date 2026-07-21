@@ -92,6 +92,8 @@ uv run pitchprob record-corners --league E0  # corners tape, T-26h (ADR 0014)
 uv run pitchprob study latency               # who copies the sharp line last
 uv run pitchprob quote-check log|report      # validate the odds-api.io feed
 uv run pitchprob risk status|report          # limits, breaker, weekly report
+uv run pitchprob status                      # pre-round freshness gate
+bash scripts/weekly-refresh.sh               # weekly ingest/xg/tape/settle loop
 cd frontend && npm run dev               # dashboard against local API
 ```
 
@@ -124,10 +126,14 @@ the frontend's vitest suite. Full stack in Docker (`make stack-up`,
 dashboard :3000); M7 results synced into the Postgres backtests table so the
 dashboard shows them.
 
-**Git state:** five sessions of work were committed on 2026-07-21 in five
-grouped commits — dashboard/A6, audit fixes A1–A5/A7/A10, ADR 0013
-(ledger + scanner), ADR 0014 (corners + latency map + PL feed), docs.
-Nothing is pushed; `origin/main` is still at `8fe89e8`.
+**Git state:** the 2026-07-21 work sits in eight grouped local commits
+(dashboard/A6 · audit fixes A1–A5/A7/A10 · ADR 0013 ledger+scanner ·
+ADR 0014 corners+latency+feed · docs · ADR 0015 risk layer ·
+scanner/ledger views · season ops), **rebased onto the recorder's daily
+tape commits and not yet pushed** — push soon: the cloud recorder pushes
+to `origin/main` every day, so each unpushed day means another rebase in
+the weekly script. The recorder's commits touch only `data/tape/`, so
+those rebases stay conflict-free.
 
 **Audit 2026-07 findings closed:** A1 (absence passthrough — the M5 null
 now needs a rerun to mean anything), A2 (early-snapshot terminology),

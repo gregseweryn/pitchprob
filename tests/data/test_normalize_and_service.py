@@ -2,15 +2,20 @@
 
 import csv
 import io
+import typing
 from datetime import date
 
 import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
-from pitchprob.data.normalize import canonical_team_name, odds_api_canonical
+from pitchprob.data.normalize import (
+    canonical_team_name,
+    odds_api_canonical,
+    suggest_canonical,
+)
 from pitchprob.data.orm import Base, Match, OddsQuote, Team
-from pitchprob.data.service import IngestionService
+from pitchprob.data.service import HttpDownloader, IngestionService
 
 from .test_football_data_adapter import BURNLEY_CITY, MODERN_COLUMNS
 
@@ -142,3 +147,86 @@ def test_match_date_derives_season_membership(session: Session) -> None:
 
     match = session.execute(select(Match)).scalar_one()
     assert match.match_date == date(2024, 5, 19)
+
+
+class TestHttpDownloaderRefresh:
+    """The weekly-refresh contract (season runbook): a cache hit must be
+    the default — past seasons never change and WSL's TLS flakes are real —
+    and `refresh=True` must actually reach the network, because the current
+    season's file grows every round and a permanent cache would serve
+    August forever."""
+
+    URL = "https://www.football-data.co.uk/mmz4281/2627/E0.csv"
+
+    def _patch_get(self, monkeypatch, calls: list[str], body: bytes) -> None:
+        class FakeResponse:
+            content = body
+
+            def raise_for_status(self) -> None:
+                return None
+
+        def fake_get(url: str, **kwargs):
+            calls.append(url)
+            return FakeResponse()
+
+        monkeypatch.setattr("pitchprob.data.service.httpx.get", fake_get)
+
+    def test_the_cache_serves_without_touching_the_network(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        calls: list[str] = []
+        self._patch_get(monkeypatch, calls, b"round one")
+        downloader = HttpDownloader(cache_dir=tmp_path)
+        assert downloader.get(self.URL) == b"round one"
+        assert downloader.get(self.URL) == b"round one"
+        assert len(calls) == 1  # second read came from disk
+
+    def test_refresh_bypasses_the_cache_and_rewrites_it(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        calls: list[str] = []
+        self._patch_get(monkeypatch, calls, b"round one")
+        HttpDownloader(cache_dir=tmp_path).get(self.URL)
+
+        self._patch_get(monkeypatch, calls, b"rounds one and two")
+        refreshed = HttpDownloader(cache_dir=tmp_path, refresh=True)
+        assert refreshed.get(self.URL) == b"rounds one and two"
+        assert len(calls) == 2
+        # and the *new* content is what later cached reads serve
+        assert HttpDownloader(cache_dir=tmp_path).get(self.URL) == (
+            b"rounds one and two"
+        )
+        assert len(calls) == 2
+
+
+class TestSuggestCanonical:
+    """Season procedure: `pick settle` lists unmatched tape names; the
+    suggester ranks canonical candidates so extending _ODDS_API_OVERRIDES
+    is a lookup, not a hunt. Advisory output — the operator confirms."""
+
+    CANDIDATES: typing.ClassVar[list[str]] = [
+        "Wolves", "Man City", "Brighton", "Nott'm Forest", "Newcastle",
+        "Arsenal", "Real Betis", "Ath Bilbao",
+    ]
+
+    def test_shared_tokens_beat_string_similarity(self) -> None:
+        ranked = suggest_canonical("Manchester City", self.CANDIDATES)
+        assert ranked[0][0] == "Man City"
+
+    def test_apostrophes_and_noise_words_do_not_block_a_match(self) -> None:
+        ranked = suggest_canonical("Nottingham Forest FC", self.CANDIDATES)
+        assert ranked[0][0] == "Nott'm Forest"
+
+    def test_a_name_with_no_plausible_candidate_returns_nothing(self) -> None:
+        assert suggest_canonical("Deportivo Riestra", self.CANDIDATES) == []
+
+    def test_at_most_three_suggestions(self) -> None:
+        ranked = suggest_canonical("Newcastle United", self.CANDIDATES, limit=3)
+        assert 1 <= len(ranked) <= 3
+        assert ranked[0][0] == "Newcastle"
+
+    def test_scores_are_descending_and_bounded(self) -> None:
+        ranked = suggest_canonical("Real Betis Balompie", self.CANDIDATES)
+        scores = [score for _name, score in ranked]
+        assert scores == sorted(scores, reverse=True)
+        assert all(0.0 < score <= 1.0 for score in scores)

@@ -11,6 +11,8 @@ everything else passes through unchanged.
 """
 
 import re
+from collections.abc import Sequence
+from difflib import SequenceMatcher
 
 _CANONICAL_OVERRIDES: dict[str, str] = {
     # England
@@ -174,6 +176,49 @@ _ODDS_API_OVERRIDES: dict[str, str] = {
 
 def odds_api_canonical(name: str) -> str:
     return _ODDS_API_OVERRIDES.get(name, name)
+
+
+#: Below this score a candidate is noise, not a suggestion. Set so that a
+#: genuinely foreign name (no shared tokens, weak string similarity) can
+#: never clear it: with zero token overlap the score is capped at 0.4.
+_MIN_SUGGESTION_SCORE = 0.45
+
+
+def suggest_canonical(
+    name: str, candidates: Sequence[str], *, limit: int = 3
+) -> list[tuple[str, float]]:
+    """Ranked canonical-name candidates for an unmatched source name.
+
+    The season procedure behind it (runbook): ``pick settle`` lists tape
+    names it could not bridge to ``matches``; this turns each into a short
+    ranked list so extending ``_ODDS_API_OVERRIDES`` is a lookup, not a
+    hunt. Advisory only — the operator confirms before the map grows, which
+    is why the score travels with the name.
+
+    Scoring: shared normalized tokens dominate (0.6 weight — "Manchester
+    City" and "Man City" share "city", and that is stronger evidence than
+    any string distance), with a difflib ratio on the normalized strings as
+    the tiebreaker (0.4). Token overlap is measured against the *query's*
+    tokens, because the tape name is usually the longer, fuller form.
+    """
+    query_tokens = set(normalized_tokens(name))
+    query_joined = " ".join(normalized_tokens(name))
+    scored: list[tuple[str, float]] = []
+    for candidate in candidates:
+        candidate_tokens = set(normalized_tokens(candidate))
+        overlap = (
+            len(query_tokens & candidate_tokens) / len(query_tokens)
+            if query_tokens
+            else 0.0
+        )
+        ratio = SequenceMatcher(
+            None, query_joined, " ".join(normalized_tokens(candidate))
+        ).ratio()
+        score = 0.6 * overlap + 0.4 * ratio
+        if score >= _MIN_SUGGESTION_SCORE:
+            scored.append((candidate, score))
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return scored[:limit]
 
 
 _NOISE_TOKENS = frozenset(

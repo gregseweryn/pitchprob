@@ -116,3 +116,39 @@ def test_readme_test_counter_is_honest_and_current() -> None:
     assert actual - claimed <= 50, (
         f"README test counter is stale: claims {claimed}, actual {actual}"
     )
+
+
+def test_runbook_names_only_commands_that_exist() -> None:
+    """Season runbook (2026/27): every `pitchprob <command>` it tells the
+    operator to run must exist in the CLI. A runbook that names a command
+    that is not there fails at the worst moment — mid-season, pre-kickoff,
+    on the machine where nobody is debugging."""
+    import re
+
+    import pitchprob.cli.main as cli_main
+
+    text = (ROOT / "docs" / "RUNBOOK-2026-27.md").read_text(encoding="utf-8")
+    known = {info.name for info in cli_main.app.registered_commands}
+    known |= {group.name for group in cli_main.app.registered_groups}
+    for command in re.findall(r"pitchprob ([a-z][a-z-]*)", text):
+        assert command in known, (
+            f"runbook names `pitchprob {command}` but the CLI has no such "
+            "command or group"
+        )
+
+
+def test_runbook_carries_the_operating_decisions() -> None:
+    """The two decisions that make the automation shape non-obvious must
+    survive edits: local-not-Actions for ingest/xg (the DB is local; a
+    missed week loses nothing, unlike the tape), and the Fri/Tue source
+    cadence that picked the Wed+Sat schedule (the audit A2 fact)."""
+    text = _read("docs/RUNBOOK-2026-27.md")
+    assert "loses **nothing**" in text
+    assert "Friday" in text and "Tuesday" in text
+    assert "_ODDS_API_OVERRIDES" in text
+    assert "Never extend the map speculatively" in text
+    script = (ROOT / "scripts" / "weekly-refresh.sh").read_text(encoding="utf-8")
+    assert "ingest --all --from-year 2026 --to-year 2026 --refresh" in script
+    assert "xg --all --from-year 2026 --to-year 2026 --refresh" in script
+    # the gate runs last so its exit code is the script's
+    assert script.rstrip().splitlines()[-2].strip().endswith("pitchprob status")

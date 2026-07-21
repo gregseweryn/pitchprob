@@ -71,7 +71,7 @@ uv run pitchprob predict --league E0 --home "Manchester City" --away "Chelsea" \
     --odds 1.55,4.4,5.9
 uv run pitchprob backtest --league E0 --start 2021-08-01
 make serve                      # FastAPI on :8000, OpenAPI docs at /docs
-make check                      # ruff + mypy --strict + 634 tests
+make check                      # ruff + mypy --strict + 667 tests
 ```
 
 Example output (real run, July 2026):
@@ -495,6 +495,35 @@ missing-or-stale. Until then `pitchprob scan --feed` returns **UNVERIFIED**
 where it would otherwise say PLAY — the edge is still computed, because the
 lead is real; the authorisation is not.
 
+#### Season operations (docs/RUNBOOK-2026-27.md)
+
+The 2026/27 measurement season runs on three legs. The odds tape records
+itself in GitHub Actions, because a missed day loses prices forever. The
+weekly results/xG refresh runs **locally** (`scripts/weekly-refresh.sh`,
+Task Scheduler, Wed+Sat — football-data updates its files on a Friday/
+Tuesday cadence), because the database lives on the operator's machine and
+a missed week loses nothing. And before any bet, the freshness gate:
+
+```
+$ uv run pitchprob status
+STALE results  newest match 2026-05-24 is 58d old (threshold 8d)
+      fix: uv run pitchprob ingest --all --from-year 2026 --to-year 2026 --refresh
+OK    xg       every match of the last 30d carries xG
+STALE tape     latest snapshot is 64h old — every scan would verdict STALE
+      fix: git pull, then: uv run pitchprob import-tape
+OK    ledger   no kicked-off picks awaiting settlement or CLV
+```
+
+(A real pre-season run — failing loudly is the correct output until the
+first round is ingested.) Four DB-only checks — results, xG, tape (the
+scanner's own 30h bar, the same constant imported, not copied), ledger
+backlog — each naming the command that fixes it, exiting non-zero so
+scripts can gate on it. When auto-settle meets a tape name the canonical
+maps cannot bridge, it prints ranked candidates from the teams table, and
+the runbook's procedure turns each into a tested one-line addition to
+`_ODDS_API_OVERRIDES` — the map grows from real unmatched reports only,
+never speculatively.
+
 #### Dashboard: scanner and ledger views
 
 The audit's Etap 7 asked for the two surfaces the dashboard was missing.
@@ -612,7 +641,7 @@ records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing
 
-634 tests: hand-computed reference values for every formula, hypothesis property tests
+667 tests: hand-computed reference values for every formula, hypothesis property tests
 (market partitions sum to 1, quarter-line AH EV ≡ mean of adjacent half lines, Shin
 books renormalize, realized settlement ≡ the probability-side markets module
 cell-for-cell, block-bootstrap scale equivariance), analytic-vs-numeric gradient

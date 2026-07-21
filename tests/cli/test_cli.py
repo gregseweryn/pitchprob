@@ -30,7 +30,9 @@ def cli_env(tmp_path, monkeypatch):
                 return payload
             raise AssertionError(f"unexpected download: {url}")
 
-    monkeypatch.setattr(cli_main, "_make_downloader", lambda: OfflineDownloader())
+    monkeypatch.setattr(
+        cli_main, "_make_downloader", lambda **kwargs: OfflineDownloader()
+    )
     yield
     db.reset()
     get_settings.cache_clear()

@@ -51,9 +51,9 @@ app = typer.Typer(
 )
 
 
-def _make_downloader() -> Downloader:
+def _make_downloader(*, refresh: bool = False) -> Downloader:
     settings = get_settings()
-    return HttpDownloader(cache_dir=settings.data_dir / "raw")
+    return HttpDownloader(cache_dir=settings.data_dir / "raw", refresh=refresh)
 
 
 def _make_odds_client(api_key: str) -> Any:
@@ -72,11 +72,20 @@ def ingest(
     all_leagues: Annotated[bool, typer.Option("--all", help="All configured leagues")] = False,
     from_year: Annotated[int, typer.Option(help="First season start year")] = 2014,
     to_year: Annotated[int, typer.Option(help="Last season start year")] = 2025,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Re-download instead of serving the on-disk cache. Needed "
+                 "for the current season: its file grows every round, and "
+                 "the cache would otherwise serve August forever.",
+        ),
+    ] = False,
 ) -> None:
     """Download and store seasons from football-data.co.uk (idempotent)."""
     configure_logging(get_settings().log_level)
     codes = list(LEAGUES) if all_leagues or not league else league
-    downloader = _make_downloader()
+    downloader = _make_downloader(refresh=refresh)
     total_matches = 0
     with session_scope() as session:
         service = IngestionService(session=session, downloader=downloader)
@@ -105,6 +114,15 @@ def xg(
     all_leagues: Annotated[bool, typer.Option("--all", help="All configured leagues")] = False,
     from_year: Annotated[int, typer.Option(help="First season start year")] = 2014,
     to_year: Annotated[int, typer.Option(help="Last season start year")] = 2025,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Re-download instead of serving the on-disk cache (needed "
+                 "for the current season). Raw responses are still archived "
+                 "append-only under data/understat/.",
+        ),
+    ] = False,
 ) -> None:
     """Attach Understat xG to already-ingested matches (idempotent)."""
     from pitchprob.data.adapters.understat import REQUIRED_HEADERS
@@ -114,7 +132,9 @@ def xg(
     configure_logging(get_settings().log_level)
     codes = list(LEAGUES) if all_leagues or not league else league
     downloader = HttpDownloader(
-        cache_dir=get_settings().data_dir / "raw", headers=REQUIRED_HEADERS
+        cache_dir=get_settings().data_dir / "raw",
+        headers=REQUIRED_HEADERS,
+        refresh=refresh,
     )
     with session_scope() as session:
         service = XgUpdateService(
@@ -1162,11 +1182,40 @@ def pick_settle(
                 f"auto-settled {summary.settled} picks "
                 f"({summary.pending} pending)"
             )
+            if summary.unmatched:
+                from sqlalchemy import select as sa_select
+
+                from pitchprob.data.normalize import (
+                    canonical_team_name,
+                    odds_api_canonical,
+                    suggest_canonical,
+                )
+                from pitchprob.data.orm import Team
+
+                canon = [
+                    row[0]
+                    for row in session.execute(
+                        sa_select(Team.canonical_name)
+                    ).all()
+                ]
+                known = set(canon)
             for description in summary.unmatched:
                 typer.echo(
-                    "  unmatched (settle with --id/--result or extend the "
-                    f"odds-api name map): {description}"
+                    "  unmatched (settle with --id/--result or extend "
+                    f"_ODDS_API_OVERRIDES in data/normalize.py): {description}"
                 )
+                # The tape stores "Home vs Away"; no club name contains
+                # " vs ", so the split is safe. Suggest only for the side
+                # the canonical maps fail to bridge — the resolved side is
+                # not the problem.
+                for side in description.split(" vs "):
+                    if canonical_team_name(odds_api_canonical(side)) in known:
+                        continue
+                    for candidate, confidence in suggest_canonical(side, canon):
+                        typer.echo(
+                            f'    candidate: "{side}" -> "{candidate}" '
+                            f"(score {confidence:.2f})"
+                        )
         clv = attach_clv(session, now=now)
         typer.echo(
             f"CLV attached to {clv.attached} picks "
@@ -1612,6 +1661,31 @@ def risk_report_command(
         Path(out).write_text(result.report + "\n", encoding="utf-8")
         typer.echo(f"report written to {out}")
     typer.echo(result.report)
+
+
+@app.command("status")
+def status_command() -> None:
+    """The pre-round freshness gate: is the data current enough to act on?
+
+    Four checks — results, xG, tape, ledger — each naming the command that
+    fixes it. Exits non-zero when anything is stale, so scripts can gate on
+    it. Run it before every scan on a match day; expect it to fail loudly
+    in pre-season, because that is the honest answer until the first round
+    is ingested.
+    """
+    from pitchprob.services.freshness import season_status
+
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        result = season_status(session, now=datetime.now(tz=UTC))
+    for check in result.checks:
+        marker = "OK   " if check.ok else "STALE"
+        typer.echo(f"{marker} {check.name:<8} {check.detail}")
+        if check.action is not None:
+            typer.echo(f"      fix: {check.action}")
+    if not result.all_ok:
+        raise typer.Exit(code=1)
+    typer.echo("all checks passed — the data is current enough to act on")
 
 
 def main() -> None:

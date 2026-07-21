@@ -137,6 +137,7 @@ uv run pitchprob oddsio books --filter PL         # katalog buków PL (bez klucz
 uv run pitchprob quote-check report               # czy feed zasłużył na zaufanie
 uv run pitchprob risk status                     # limity i stan bezpiecznika
 uv run pitchprob risk report                     # cotygodniowe „co mówi taśma"
+uv run pitchprob status                          # bramka świeżości przed kolejką
 
 # skaner: podajesz kursy, które widzisz u polskich buków
 uv run pitchprob scan "arsenal" --market ou --selection over --line 3.0 \

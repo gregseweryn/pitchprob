@@ -196,6 +196,58 @@ class TestPickCommands:
         assert result.exit_code != 0
         assert "allowance" in result.output
 
+    def test_unmatched_pick_gets_ranked_override_suggestions(
+        self, cli_env
+    ) -> None:
+        """The season procedure (runbook): a tape name the canonical maps do
+        not bridge is listed AND accompanied by ranked candidates from the
+        teams table, so extending _ODDS_API_OVERRIDES is a lookup, not a
+        hunt. Advisory — nothing is auto-added."""
+        from pitchprob.data.orm import League, Match, Season, Team
+
+        past_kickoff = (_NOW - timedelta(days=1)).replace(microsecond=0)
+        with db.session_scope() as session:
+            league = League(code="D1", name="Bundesliga", country="Germany")
+            session.add(league)
+            session.flush()
+            season = Season(
+                league_id=league.id, label="2026/27", start_year=2026
+            )
+            union = Team(canonical_name="Union Berlin", country="Germany")
+            leipzig = Team(canonical_name="RB Leipzig", country="Germany")
+            session.add_all([season, union, leipzig])
+            session.flush()
+            session.add(
+                Match(
+                    season_id=season.id,
+                    match_date=past_kickoff.date(),
+                    kickoff_utc=past_kickoff,
+                    home_team_id=union.id,
+                    away_team_id=leipzig.id,
+                    ft_home=1,
+                    ft_away=1,
+                )
+            )
+        logged = runner.invoke(
+            cli_main.app,
+            [
+                "pick", "log",
+                # tape naming the override map does not (yet) bridge
+                "--home", "1. FC Union Berlin", "--away", "RB Leipzig",
+                "--kickoff", past_kickoff.isoformat(),
+                "--market", "1x2", "--selection", "home",
+                "--book", "sts", "--stake", "5", "--price", "2.10",
+            ],
+        )
+        assert logged.exit_code == 0, logged.output
+        result = runner.invoke(cli_main.app, ["pick", "settle"])
+        assert result.exit_code == 0, result.output
+        assert "unmatched" in result.output
+        # the unresolved side gets a ranked candidate; the resolved side none
+        assert "1. FC Union Berlin" in result.output
+        assert "Union Berlin" in result.output
+        assert "_ODDS_API_OVERRIDES" in result.output
+
     def test_settle_and_list_close_the_loop(self, cli_env) -> None:
         # A finished fixture: kickoff yesterday, tape closing 2 days ago.
         past_kickoff = (_NOW - timedelta(days=1)).replace(microsecond=0)
@@ -270,3 +322,45 @@ class TestPickCommands:
         result = runner.invoke(cli_main.app, ["pick", "settle"])
         assert result.exit_code == 0, result.output
         assert "Everton vs Leeds United" in result.output
+
+
+class TestStatusCommand:
+    """The gate itself is unit-tested in tests/services/test_freshness.py;
+    here we pin the CLI contract scripts rely on: non-zero exit when stale,
+    and every failing line naming its fix."""
+
+    def test_an_empty_database_fails_the_gate_with_fixes(self, cli_env) -> None:
+        result = runner.invoke(cli_main.app, ["status"])
+        assert result.exit_code == 1
+        assert "STALE" in result.output
+        assert "fix:" in result.output
+
+    def test_a_current_setup_passes_and_exits_zero(self, cli_env) -> None:
+        from pitchprob.data.orm import League, Match, Season, Team
+
+        _seed_totals_tape()  # fresh tick, upcoming fixture
+        with db.session_scope() as session:
+            league = League(code="E0", name="Premier League", country="England")
+            session.add(league)
+            session.flush()
+            season = Season(league_id=league.id, label="2026/27", start_year=2026)
+            home = Team(canonical_name="Arsenal", country="England")
+            away = Team(canonical_name="Coventry City", country="England")
+            session.add_all([season, home, away])
+            session.flush()
+            session.add(
+                Match(
+                    season_id=season.id,
+                    match_date=(_NOW - timedelta(days=2)).date(),
+                    kickoff_utc=_NOW - timedelta(days=2),
+                    home_team_id=home.id,
+                    away_team_id=away.id,
+                    ft_home=2,
+                    ft_away=0,
+                    xg_home=Decimal("1.9"),
+                    xg_away=Decimal("0.4"),
+                )
+            )
+        result = runner.invoke(cli_main.app, ["status"])
+        assert result.exit_code == 0, result.output
+        assert "all checks passed" in result.output
