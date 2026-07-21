@@ -17,10 +17,20 @@ import { Button, Field, Input, Panel, Select } from "@/components/ui";
 import { cx } from "@/lib/format";
 
 const MARKETS = [
-  { id: "1x2", label: "1X2", selections: ["home", "draw", "away"], line: false },
-  { id: "ou", label: "Over/Under", selections: ["over", "under"], line: true },
-  { id: "ah", label: "Asian handicap", selections: ["home", "away"], line: true },
+  { id: "1x2", label: "1X2 (gospodarz/remis/gość)", selections: ["home", "draw", "away"], line: false },
+  { id: "ou", label: "Powyżej/poniżej goli", selections: ["over", "under"], line: true },
+  { id: "ah", label: "Handicap azjatycki", selections: ["home", "away"], line: true },
 ] as const;
+
+/** Selection values are the API's contract (ADR 0013); only the label the
+ * operator reads is Polish. */
+const SELECTION_LABELS: Record<string, string> = {
+  home: "gospodarz",
+  draw: "remis",
+  away: "gość",
+  over: "powyżej",
+  under: "poniżej",
+};
 
 export function LogPickForm() {
   const router = useRouter();
@@ -60,7 +70,7 @@ export function LogPickForm() {
 
   async function submit() {
     if (!fixture) {
-      setError("Pick a fixture from the tape first.");
+      setError("Najpierw wybierz mecz z taśmy.");
       return;
     }
     setBusy(true);
@@ -83,7 +93,7 @@ export function LogPickForm() {
         override_risk: override,
       });
       setSaved(
-        `Logged pick #${pick.id}${pick.risk_override ? " (RISK OVERRIDE — recorded permanently)" : ""}`,
+        `Zapisano zakład #${pick.id}${pick.risk_override ? " (POMINIĘTO LIMIT — zapisane na stałe)" : ""}`,
       );
       setPrice("");
       setOverride(false);
@@ -100,12 +110,12 @@ export function LogPickForm() {
 
   return (
     <Panel
-      title="Log a bet you placed"
-      footnote="Record it after the money is down, with the price you actually got — the ledger measures PLN reality, not the price you hoped for."
+      title="Zapisz zakład, który postawiłeś"
+      footnote="Zapisz go po postawieniu pieniędzy, z kursem, który naprawdę dostałeś — dziennik mierzy realne złotówki, nie kurs, na który liczyłeś."
     >
       <div className="flex flex-col gap-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Fixture">
+          <Field label="Mecz">
             <Select
               value={eventId}
               onChange={(event) => setEventId(event.target.value)}
@@ -120,7 +130,7 @@ export function LogPickForm() {
               {events === null ? <option>loading…</option> : null}
             </Select>
           </Field>
-          <Field label="Market">
+          <Field label="Rynek">
             <Select value={market} onChange={(e) => chooseMarket(e.target.value)}>
               {MARKETS.map((entry) => (
                 <option key={entry.id} value={entry.id}>
@@ -129,19 +139,19 @@ export function LogPickForm() {
               ))}
             </Select>
           </Field>
-          <Field label="Selection">
+          <Field label="Typ">
             <Select
               value={selection}
               onChange={(event) => setSelection(event.target.value)}
             >
               {spec.selections.map((name) => (
                 <option key={name} value={name}>
-                  {name}
+                  {SELECTION_LABELS[name] ?? name}
                 </option>
               ))}
             </Select>
           </Field>
-          <Field label={spec.line ? "Line" : "Line (n/a)"}>
+          <Field label={spec.line ? "Linia" : "Linia (nie dotyczy)"}>
             <Input
               value={line}
               onChange={(event) => setLine(event.target.value)}
@@ -153,7 +163,7 @@ export function LogPickForm() {
         </div>
 
         <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,14rem)_6.5rem_6.5rem_auto]">
-          <Field label="Book">
+          <Field label="Bukmacher">
             <Input
               value={bookmaker}
               onChange={(event) => setBookmaker(event.target.value)}
@@ -161,14 +171,14 @@ export function LogPickForm() {
               className="!font-sans"
             />
           </Field>
-          <Field label="Stake (PLN)">
+          <Field label="Stawka (zł)">
             <Input
               value={stake}
               onChange={(event) => setStake(event.target.value)}
               inputMode="decimal"
             />
           </Field>
-          <Field label="Price">
+          <Field label="Kurs">
             <Input
               value={price}
               onChange={(event) => setPrice(event.target.value)}
@@ -183,7 +193,7 @@ export function LogPickForm() {
               onChange={(event) => setTaxFree(event.target.checked)}
               className="size-4 accent-[var(--gold-ink)]"
             />
-            tax-free
+            bez podatku
           </label>
         </div>
 
@@ -194,8 +204,8 @@ export function LogPickForm() {
           >
             <p className="text-sm font-medium text-brick">
               {refusal.kind === "limit"
-                ? "The risk layer refused this bet"
-                : "This bet is not valid"}
+                ? "Warstwa ryzyka odrzuciła ten zakład"
+                : "Ten zakład jest nieprawidłowy"}
             </p>
             <p className="mt-1 max-w-[70ch] text-xs leading-relaxed text-brick">
               {refusal.message}
@@ -208,8 +218,8 @@ export function LogPickForm() {
                   onChange={(event) => setOverride(event.target.checked)}
                   className="size-4 accent-[var(--brick)]"
                 />
-                Place it anyway — the pick is marked permanently and appears
-                in the weekly report.
+                Postaw mimo to — zakład zostanie trwale oznaczony i pojawi
+                się w raporcie tygodniowym.
               </label>
             ) : null}
           </div>
@@ -229,7 +239,7 @@ export function LogPickForm() {
             role="status"
             className={cx(
               "rounded-md border px-4 py-3 text-sm",
-              saved.includes("OVERRIDE")
+              saved.includes("POMINIĘTO")
                 ? "border-brick/30 bg-brick-soft text-brick"
                 : "border-line bg-surface text-ink",
             )}
@@ -240,7 +250,7 @@ export function LogPickForm() {
 
         <div className="flex justify-end">
           <Button onClick={submit} disabled={busy}>
-            {busy ? "Saving…" : override ? "Log with override" : "Log this bet"}
+            {busy ? "Zapisuję…" : override ? "Zapisz mimo limitu" : "Zapisz ten zakład"}
           </Button>
         </div>
       </div>

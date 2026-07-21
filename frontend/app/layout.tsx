@@ -9,15 +9,18 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "pitchprob",
   description:
-    "Football probability engine: calibrated market estimates, honest backtests. No profit promises.",
+    "Silnik prawdopodobieństw piłkarskich: skalibrowane oszacowania rynkowe, uczciwe backtesty. Bez obietnic zysku.",
 };
 
+// Operator-facing copy is Polish; code, comments and docs stay English.
+// The operator reads this surface daily and is the only user.
 const NAV = [
-  { href: "/", label: "Price a fixture" },
-  { href: "/scanner", label: "Scanner" },
-  { href: "/ledger", label: "Ledger" },
-  { href: "/coupons", label: "Coupons" },
-  { href: "/backtests", label: "Backtests" },
+  { href: "/jak-to-dziala", label: "Jak to działa" },
+  { href: "/scanner", label: "Skaner" },
+  { href: "/ledger", label: "Dziennik" },
+  { href: "/", label: "Wycena meczu" },
+  { href: "/coupons", label: "Kupony" },
+  { href: "/backtests", label: "Backtesty" },
 ];
 
 export default function RootLayout({
@@ -52,16 +55,16 @@ export default function RootLayout({
               ))}
             </nav>
             <span className="ml-auto hidden text-xs text-ink-muted sm:block">
-              probabilities, not promises
+              prawdopodobieństwa, nie obietnice
             </span>
           </div>
         </header>
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>
         <footer className="border-t border-line">
           <p className="mx-auto w-full max-w-6xl px-6 py-4 text-xs leading-relaxed text-ink-muted">
-            Model estimates carry uncertainty and are routinely worse than closing-line
-            odds. Nothing here guarantees profit; treat every number as an estimate with
-            error bars.
+            Oszacowania modelu obarczone są niepewnością i regularnie wypadają gorzej
+            niż kurs zamknięcia. Nic tutaj nie gwarantuje zysku — każdą liczbę traktuj
+            jako oszacowanie z marginesem błędu.
           </p>
         </footer>
       </body>

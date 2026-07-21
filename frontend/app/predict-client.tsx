@@ -95,7 +95,7 @@ export function PredictClient({ leagues }: { leagues: League[] }) {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Price a fixture</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Wycena meczu</h1>
         <p className="mt-1 max-w-[65ch] text-sm text-ink-muted">
           Full market probability book from the model stack — including where the
           models disagree with each other.
@@ -110,7 +110,7 @@ export function PredictClient({ leagues }: { leagues: League[] }) {
             void submit();
           }}
         >
-          <Field label="League">
+          <Field label="Liga">
             <Select value={league} onChange={(e) => setLeague(e.target.value)}>
               {leagues.map((item) => (
                 <option key={item.code} value={item.code}>
@@ -119,14 +119,14 @@ export function PredictClient({ leagues }: { leagues: League[] }) {
               ))}
             </Select>
           </Field>
-          <Field label="Home team">
+          <Field label="Gospodarz">
             <Select value={home} onChange={(e) => setHome(e.target.value)}>
               {teams.map((name) => (
                 <option key={name}>{name}</option>
               ))}
             </Select>
           </Field>
-          <Field label="Away team">
+          <Field label="Gość">
             <Select value={away} onChange={(e) => setAway(e.target.value)}>
               {teams.map((name) => (
                 <option key={name}>{name}</option>
@@ -149,7 +149,7 @@ export function PredictClient({ leagues }: { leagues: League[] }) {
             </div>
           </Field>
           <Button type="submit" disabled={loading || sameTeams || !home || !away}>
-            {loading ? "Pricing…" : "Price the fixture"}
+            {loading ? "Liczę…" : "Wyceń mecz"}
           </Button>
           {sameTeams ? (
             <p className="text-xs text-brick">Pick two different teams.</p>

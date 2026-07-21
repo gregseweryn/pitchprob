@@ -15,7 +15,7 @@ export default async function PredictPage() {
   if (apiError) {
     return (
       <div className="max-w-xl">
-        <h1 className="mb-3 text-2xl font-semibold tracking-tight">Price a fixture</h1>
+        <h1 className="mb-3 text-2xl font-semibold tracking-tight">Wycena meczu</h1>
         <p className="rounded-md border border-brick/30 bg-brick-soft px-4 py-3 text-sm text-brick">
           The pitchprob API is not reachable ({apiError}). Start it with{" "}
           <code className="num">make serve</code> and reload.

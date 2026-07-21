@@ -68,17 +68,17 @@ _CENTS = Decimal("0.01")
 #: Payload contract (ADR 0004): the ledger's numbers cannot be rendered
 #: anywhere without the sentences that make them readable.
 LEDGER_CAVEATS: tuple[str, ...] = (
-    "CLV is the decision variable, not ROI. Over a few dozen small bets ROI "
-    "is almost entirely variance; closing-line value is the part that "
-    "carries signal.",
-    "Read clv_sharp before clv_exec. Sharp CLV is timing alone — the "
-    "Pinnacle price at bet time against the closing fair. Their difference "
-    "is what the venue and the promotion contributed, which under the Phase "
-    "0-2a verdicts is the only place value has been shown to live.",
-    "The tape's \"close\" is the last daily snapshot before kickoff and can "
-    "sit hours early; every pick carries that timestamp.",
-    "Stakes are 2-5 PLN against a notional 500 PLN bankroll. This is a "
-    "measurement season: the output is evidence about CLV, not income.",
+    "Zmienną decyzyjną jest CLV, nie ROI. Przy kilkudziesięciu małych "
+    "zakładach ROI to niemal wyłącznie wariancja; sygnał niesie wartość "
+    "wobec kursu zamknięcia.",
+    "Czytaj CLV ostre przed wykonanym. Ostre to samo wyczucie czasu — cena "
+    "Pinnacle'a w chwili zakładu wobec ceny zamknięcia. Ich różnica to wkład "
+    "bukmachera i promocji, a według werdyktów faz 0-2a to jedyne miejsce, "
+    "gdzie wykazano jakąkolwiek wartość.",
+    "\"Zamknięcie\" taśmy to ostatni dzienny snapshot przed gwizdkiem i bywa "
+    "o kilka godzin za wczesny; każdy zakład niesie ten znacznik czasu.",
+    "Stawki to 2-5 zł przy umownym banku 500 zł. To sezon pomiarowy: wynikiem "
+    "jest dowód na temat CLV, nie przychód.",
 )
 
 

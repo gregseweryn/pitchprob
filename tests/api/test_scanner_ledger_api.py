@@ -197,9 +197,11 @@ class TestScan:
         caveats = self._scan(client).json()["caveats"]
         assert len(caveats) >= 4
         joined = " ".join(caveats)
-        assert "effective prices" in joined
+        # Operator-facing copy is Polish (the operator is the only reader);
+        # the facts pinned here are the ones that must never go missing.
+        assert "kursach efektywnych" in joined
         assert "12%" in joined
-        assert "STALE" in joined
+        assert "NIEAKTUALNE" in joined
 
 
 class TestLedger:
@@ -254,8 +256,8 @@ class TestLedger:
 
     def test_caveats_lead_with_clv_not_roi(self, client: TestClient) -> None:
         joined = " ".join(client.get("/v1/ledger").json()["caveats"])
-        assert "decision variable" in joined
-        assert "clv_sharp before clv_exec" in joined
+        assert "Zmienną decyzyjną jest CLV" in joined
+        assert "CLV ostre przed wykonanym" in joined
 
 
 class TestLogPickEndpoint:

@@ -137,7 +137,7 @@ export function ErrorBanner({ message }: { message: string }) {
  * footer, never behind a tooltip. */
 export function Caveats({
   items,
-  title = "Read these with the numbers",
+  title = "Przeczytaj to razem z liczbami",
 }: {
   items: string[];
   title?: string;
@@ -172,13 +172,23 @@ const VERDICT_STYLES: Record<string, string> = {
   "NO ANCHOR": "border-dashed border-ink-muted text-ink-muted",
 };
 
+/** The API's verdict vocabulary is a stable contract (ADR 0013); only the
+ * label the operator reads is translated. */
+const VERDICT_LABELS: Record<string, string> = {
+  PLAY: "GRAJ",
+  UNVERIFIED: "NIEZWERYFIKOWANE",
+  "NO BET": "NIE GRAJ",
+  STALE: "NIEAKTUALNE",
+  "NO ANCHOR": "BRAK KOTWICY",
+};
+
 const VERDICT_HINTS: Record<string, string> = {
-  PLAY: "Edge clears the gate against a fresh sharp anchor.",
+  PLAY: "Przewaga przekracza próg wobec świeżej kotwicy.",
   UNVERIFIED:
-    "Would be a play, but the price came from the unvalidated feed — check the book's own screen first.",
-  "NO BET": "Priced and rejected: the edge does not clear the gate.",
-  STALE: "The sharp anchor is too old to bet against. Refresh the tape.",
-  "NO ANCHOR": "The tape does not quote this line, so there is nothing to compare.",
+    "Byłoby „graj”, ale kurs pochodzi z niezweryfikowanego feedu — sprawdź najpierw stronę bukmachera.",
+  "NO BET": "Policzone i odrzucone: przewaga nie przekracza progu.",
+  STALE: "Kotwica jest za stara, żeby na niej grać. Odśwież taśmę.",
+  "NO ANCHOR": "Taśma nie kwotuje tej linii, więc nie ma z czym porównać.",
 };
 
 export function VerdictBadge({ verdict }: { verdict: string }) {
@@ -190,7 +200,7 @@ export function VerdictBadge({ verdict }: { verdict: string }) {
         VERDICT_STYLES[verdict] ?? "border-line text-ink-muted",
       )}
     >
-      {verdict}
+      {VERDICT_LABELS[verdict] ?? verdict}
     </span>
   );
 }

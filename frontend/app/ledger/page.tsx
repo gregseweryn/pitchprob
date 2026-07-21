@@ -40,9 +40,9 @@ function ClvBlock({ clv }: { clv: WeeklyMetrics["clv"] }) {
   if (clv.n === 0) {
     return (
       <p className="max-w-[70ch] text-sm text-ink-muted">
-        No pick carries CLV yet. A bet earns one only after kickoff, when the
-        tape has a closing fair to compare against — so an empty column here
-        means &ldquo;not measurable&rdquo;, never &ldquo;zero&rdquo;.
+        Żaden zakład nie ma jeszcze CLV. Zakład dostaje je dopiero po
+        rozpoczęciu meczu, gdy taśma ma cenę zamknięcia do porównania — pusta
+        kolumna znaczy „nie da się zmierzyć”, nigdy „zero”.
       </p>
     );
   }
@@ -53,22 +53,22 @@ function ClvBlock({ clv }: { clv: WeeklyMetrics["clv"] }) {
     note: string;
   }> = [
     {
-      label: "sharp CLV (timing)",
+      label: "CLV ostre (wyczucie czasu)",
       mean: clv.mean_sharp,
       ci: ciRange(clv.sharp_ci),
-      note: "Pinnacle at bet time vs the closing fair",
+      note: "Pinnacle w chwili zakładu vs cena zamknięcia",
     },
     {
-      label: "exec CLV (PLN-real)",
+      label: "CLV wykonane (realne złotówki)",
       mean: clv.mean_exec,
       ci: ciRange(clv.exec_ci),
-      note: "the price actually executed, after tax or promo",
+      note: "kurs faktycznie wzięty, po podatku lub promocji",
     },
     {
-      label: "shopping / promo",
+      label: "wybór buka / promocja",
       mean: clv.mean_shopping,
       ci: ciRange(clv.shopping_ci),
-      note: "exec minus sharp, paired per bet",
+      note: "wykonane minus ostre, parami dla każdego zakładu",
     },
   ];
   return (
@@ -77,9 +77,9 @@ function ClvBlock({ clv }: { clv: WeeklyMetrics["clv"] }) {
         <table className="w-full min-w-[34rem] text-sm">
           <thead>
             <tr className="border-b border-line text-left text-xs text-ink-muted">
-              <th className="pb-2 font-medium">component</th>
-              <th className="pb-2 text-right font-medium">mean</th>
-              <th className="pb-2 text-right font-medium">95% CI</th>
+              <th className="pb-2 font-medium">składnik</th>
+              <th className="pb-2 text-right font-medium">średnia</th>
+              <th className="pb-2 text-right font-medium">przedział 95%</th>
             </tr>
           </thead>
           <tbody>
@@ -101,18 +101,18 @@ function ClvBlock({ clv }: { clv: WeeklyMetrics["clv"] }) {
         </table>
       </div>
       <p className="max-w-[70ch] text-xs leading-relaxed text-ink-muted">
-        {clv.n} bets across {clv.n_blocks}{" "}
-        {clv.n_blocks === 1 ? "ISO week" : "ISO weeks"}.{" "}
+        {clv.n} zakładów w {clv.n_blocks}{" "}
+        {clv.n_blocks === 1 ? "tygodniu" : "tygodniach"}.{" "}
         {rows.every((row) => row.ci === null) ? (
           <strong className="font-medium text-ink">
-            No interval is published below four weeks of bets: a block
-            bootstrap that resamples a single week returns that week every
-            time, so the &ldquo;95% CI&rdquo; would have zero width — the most
-            confident-looking output in the system, from the least evidence.
-            Read the means as point estimates, not as a finding.
+            Poniżej czterech tygodni nie publikujemy przedziału ufności:
+            losowanie z jednego tygodnia zwraca ten sam tydzień za każdym
+            razem, więc „przedział 95%” miałby zerową szerokość — najpewniej
+            wyglądająca liczba w całym systemie, zrobiona z najmniejszej
+            ilości danych. Traktuj średnie jako szacunek, nie jako wynik.
           </strong>
         ) : (
-          "Intervals are block-bootstrapped over ISO weeks, the exchangeable unit for bets that share a match round."
+          "Przedziały liczone metodą bootstrap po tygodniach — to najmniejsza jednostka, w której zakłady z jednej kolejki nie zaburzają wyniku."
         )}
       </p>
     </div>
@@ -126,42 +126,42 @@ function RiskBlock({ weekly }: { weekly: WeeklyMetrics }) {
       <StatList
         items={[
           {
-            label: "Equity",
+            label: "Kapitał",
             value: pln(drawdown.equity_pln),
-            hint: `peak ${pln(drawdown.peak_equity_pln)}`,
+            hint: `szczyt ${pln(drawdown.peak_equity_pln)}`,
           },
           {
-            label: "Drawdown",
+            label: "Obsunięcie",
             value: (
               <span className={cx(drawdown.breaker_tripped && "text-brick")}>
                 {pln(drawdown.drawdown_pln)}
               </span>
             ),
-            hint: `stop at ${pln(drawdown.limit_pln)}`,
+            hint: `stop przy ${pln(drawdown.limit_pln)}`,
           },
           {
-            label: "Circuit breaker",
+            label: "Bezpiecznik",
             value: drawdown.breaker_tripped ? (
-              <span className="text-brick">tripped</span>
+              <span className="text-brick">zadziałał</span>
             ) : (
-              "open"
+              "otwarty"
             ),
             hint: drawdown.breaker_tripped
-              ? "pick log refuses new bets"
+              ? "dziennik odmawia nowych zakładów"
               : undefined,
           },
           ...Object.entries(taxFree).map(([book, state]) => ({
-            label: `Tax-free left (${book})`,
+            label: `Bez podatku zostało (${book})`,
             value: pln(state.remaining_pln),
-            hint: `${pln(state.used_pln)} of turnover used`,
+            hint: `wykorzystano ${pln(state.used_pln)} obrotu`,
           })),
         ]}
       />
       {overrides.length > 0 ? (
         <div className="rounded-md border border-brick/30 bg-brick-soft px-4 py-3">
           <h4 className="text-sm font-medium text-brick">
-            {overrides.length} pick
-            {overrides.length === 1 ? "" : "s"} placed as a risk override
+            {overrides.length}{" "}
+            {overrides.length === 1 ? "zakład postawiony" : "zakłady postawione"} z pominięciem limitu
           </h4>
           <ul className="mt-2 flex flex-col gap-1.5">
             {overrides.map((entry) => (
@@ -174,7 +174,7 @@ function RiskBlock({ weekly }: { weekly: WeeklyMetrics }) {
           </ul>
         </div>
       ) : (
-        <p className="text-xs text-ink-muted">No limit overrides on record.</p>
+        <p className="text-xs text-ink-muted">Brak pominięć limitów.</p>
       )}
     </div>
   );
@@ -186,18 +186,18 @@ function PicksTable({ picks }: { picks: LedgerResponse["picks"] }) {
       <table className="w-full min-w-[62rem] text-sm">
         <thead>
           <tr className="border-b border-line text-left text-xs text-ink-muted">
-            <th className="pb-2 font-medium">kickoff</th>
-            <th className="pb-2 font-medium">fixture</th>
-            <th className="pb-2 font-medium">bet</th>
-            <th className="pb-2 font-medium">book</th>
-            <th className="pb-2 text-right font-medium">stake</th>
-            <th className="pb-2 text-right font-medium">quoted</th>
-            <th className="pb-2 text-right font-medium">effective</th>
-            <th className="pb-2 text-right font-medium">sharp</th>
-            <th className="pb-2 text-right font-medium">return</th>
-            <th className="pb-2 text-right font-medium">sharp CLV</th>
-            <th className="pb-2 text-right font-medium">exec CLV</th>
-            <th className="pb-2 text-right font-medium">shopping</th>
+            <th className="pb-2 font-medium">początek</th>
+            <th className="pb-2 font-medium">mecz</th>
+            <th className="pb-2 font-medium">zakład</th>
+            <th className="pb-2 font-medium">bukmacher</th>
+            <th className="pb-2 text-right font-medium">stawka</th>
+            <th className="pb-2 text-right font-medium">kurs</th>
+            <th className="pb-2 text-right font-medium">efektywny</th>
+            <th className="pb-2 text-right font-medium">ostry</th>
+            <th className="pb-2 text-right font-medium">zwrot</th>
+            <th className="pb-2 text-right font-medium">CLV ostre</th>
+            <th className="pb-2 text-right font-medium">CLV wykon.</th>
+            <th className="pb-2 text-right font-medium">wybór buka</th>
           </tr>
         </thead>
         <tbody>
@@ -213,7 +213,7 @@ function PicksTable({ picks }: { picks: LedgerResponse["picks"] }) {
                     title={pick.risk_note ?? undefined}
                     className="ml-1.5 rounded border border-brick/40 px-1 text-xs text-brick"
                   >
-                    override
+                    pominięto limit
                   </span>
                 ) : null}
               </td>
@@ -224,7 +224,7 @@ function PicksTable({ picks }: { picks: LedgerResponse["picks"] }) {
               <td className="py-2">
                 {pick.bookmaker}
                 {pick.tax_free ? (
-                  <span className="ml-1.5 text-xs text-ink-muted">tax-free</span>
+                  <span className="ml-1.5 text-xs text-ink-muted">bez podatku</span>
                 ) : null}
               </td>
               <td className="num py-2 text-right">
@@ -241,7 +241,7 @@ function PicksTable({ picks }: { picks: LedgerResponse["picks"] }) {
               </td>
               <td className="num py-2 text-right">
                 {pick.gross_return_pln == null ? (
-                  <span className="text-ink-muted">open</span>
+                  <span className="text-ink-muted">otwarty</span>
                 ) : (
                   Number(pick.gross_return_pln).toFixed(2)
                 )}
@@ -281,7 +281,7 @@ function stalestClose(
         3_600_000,
     );
   if (ages.length === 0) return undefined;
-  return `The tape's "close" is the last daily snapshot before kickoff and can sit hours early — the oldest here was observed ${ageLabel(
+  return `„Zamknięcie” taśmy to ostatni dzienny snapshot przed gwizdkiem i bywa o kilka godzin za wczesny — najstarszy tutaj zaobserwowano ${ageLabel(
     Math.max(...ages),
   )}.`;
 }
@@ -298,9 +298,9 @@ export default async function LedgerPage() {
   if (apiError || !data) {
     return (
       <div className="flex max-w-xl flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Ledger</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Dziennik</h1>
         <ErrorBanner
-          message={`The pitchprob API is not reachable (${apiError}). Start it with \`make serve\` and reload.`}
+          message={`Nie mogę połączyć się z API (${apiError}). Uruchom aplikację skrótem pitchprob.bat i odśwież stronę.`}
         />
       </div>
     );
@@ -312,69 +312,68 @@ export default async function LedgerPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Ledger</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Dziennik</h1>
         <p className="mt-1 max-w-[70ch] text-sm text-ink-muted">
-          Every real-money bet, and what the tape says about it. This is a
-          measurement season at 2–5 PLN a bet: the output is evidence about
-          closing-line value, not income.
+          Każdy zakład za prawdziwe pieniądze i to, co mówi o nim taśma.
+          To sezon pomiarowy po 2–5 zł na zakład: wynikiem jest dowód na
+          temat wartości wobec kursu zamknięcia, nie przychód.
         </p>
       </div>
 
       {picks.length === 0 ? (
-        <Panel title="No bets logged yet">
+        <Panel title="Nie zapisano jeszcze żadnego zakładu">
           <p className="max-w-[70ch] text-sm text-ink-muted">
-            The ledger fills up from the command line, one executed bet at a
-            time:{" "}
+            Zapisz pierwszy zakład formularzem poniżej — albo z terminala:{" "}
             <code className="num">
               pitchprob pick log --match &quot;arsenal&quot; --market ou
               --selection over --line 3.0 --book betclic --stake 5 --price
               2.10 --tax-free
             </code>
-            . Each pick captures the Pinnacle anchor at bet time, so its
-            timing CLV cannot be reconstructed favourably afterwards.
+            . Każdy wpis zapamiętuje cenę Pinnacle&apos;a z chwili zakładu, więc
+            CLV nie da się potem naciągnąć na swoją korzyść.
           </p>
         </Panel>
       ) : null}
 
       <Panel
-        title="CLV — the decision variable"
-        footnote="Read sharp CLV first: it is the only timing number. Exec minus sharp is what the venue and the promotion contributed."
+        title="CLV — zmienna decyzyjna"
+        footnote="Czytaj najpierw CLV ostre: to jedyna liczba o wyczuciu czasu. Wykonane minus ostre to wkład bukmachera i promocji."
       >
         <ClvBlock clv={weekly.clv} />
       </Panel>
 
       <Panel
-        title={`Last ${weekly.window_days} days`}
-        footnote={`Generated ${generated.toISOString().replace("T", " ").slice(0, 16)} UTC`}
+        title={`Ostatnie ${weekly.window_days} dni`}
+        footnote={`Wygenerowano ${generated.toISOString().replace("T", " ").slice(0, 16)} UTC`}
       >
         <StatList
           items={[
-            { label: "Picks", value: weekly.window.n_picks },
-            { label: "Staked", value: pln(weekly.window.staked_pln) },
+            { label: "Zakłady", value: weekly.window.n_picks },
+            { label: "Postawiono", value: pln(weekly.window.staked_pln) },
             {
-              label: "Settled",
+              label: "Rozliczone",
               value: weekly.window.n_settled,
-              hint: `${picks.length - summary.n_settled} still open`,
+              hint: `${picks.length - summary.n_settled} wciąż otwartych`,
             },
             {
-              label: "Realized",
+              label: "Zrealizowany wynik",
               value: (
                 <span className={signColor(weekly.window.profit_pln)}>
                   {signedPln(weekly.window.profit_pln)}
                 </span>
               ),
-              hint: "variance, not signal, at this sample size",
+              hint: "przy tej liczbie zakładów to wariancja, nie sygnał",
             },
             {
-              label: "Season ROI",
+              label: "ROI sezonu",
               value: summary.roi == null ? "—" : signedPct(summary.roi),
-              hint: `over ${summary.n_settled} settled bets`,
+              hint: `z ${summary.n_settled} rozliczonych zakładów`,
             },
           ]}
         />
       </Panel>
 
-      <Panel title="Risk layer">
+      <Panel title="Warstwa ryzyka">
         <RiskBlock weekly={weekly} />
       </Panel>
 
@@ -382,7 +381,7 @@ export default async function LedgerPage() {
 
       {picks.length > 0 ? (
         <Panel
-          title={`Picks (${picks.length})`}
+          title={`Zakłady (${picks.length})`}
           footnote={stalestClose(picks, weekly.generated_at)}
         >
           <PicksTable picks={picks} />

@@ -42,20 +42,20 @@ from pitchprob.services.tape import (
 #: *with* the verdicts, so no surface can render the numbers without them.
 #: The dashboard prints these as content, not as a footer.
 SCANNER_CAVEATS: tuple[str, ...] = (
-    "The anchor is the Shin-de-margined Pinnacle price from the odds tape — "
-    "a market price, not a model forecast. After the Phase 0-2a nulls the "
-    "model does not outpredict the market, so a model fair is shown as "
-    "information only and never changes a verdict.",
-    "Every comparison runs on effective prices: x0.88 under the 12% Polish "
-    "turnover tax, x1.0 under a tax-free promo. A taxed favourite below "
-    "~1.14 pays back less than the stake even when it wins.",
-    "The tape snapshots once a day, so the anchor can be hours old. Its age "
-    "is printed with every verdict; an anchor older than 30 hours downgrades "
-    "PLAY to STALE, because a stale sharp line is a prompt to refresh the "
-    "tape, not a basis for a bet.",
-    "Expect NO BET. The turnover tax is larger than any edge this project "
-    "has measured; value appears in promotions and in Polish prices that "
-    "have not yet followed a sharp move.",
+    "Kotwicą jest cena Pinnacle'a z taśmy, pozbawiona marży metodą Shina — "
+    "to cena rynkowa, nie prognoza modelu. Model nie wygrywa z rynkiem "
+    "(sprawdzone w fazach 0-2a), więc jego fair pokazujemy wyłącznie "
+    "informacyjnie i nigdy nie zmienia werdyktu.",
+    "Wszystko liczymy na kursach efektywnych: x0,88 przy 12% podatku od "
+    "stawki, x1,0 pod promocją bez podatku. Opodatkowany faworyt poniżej "
+    "kursu ~1,14 zwraca mniej niż stawkę, nawet gdy wygra.",
+    "Taśma nagrywa raz dziennie, więc kotwica bywa sprzed kilku godzin. Jej "
+    "wiek jest drukowany przy każdym werdykcie; kotwica starsza niż 30 godzin "
+    "zmienia GRAJ na NIEAKTUALNE, bo nieświeża cena ostra to sygnał do "
+    "odświeżenia taśmy, a nie podstawa do zakładu.",
+    "Spodziewaj się NIE GRAJ. Podatek od stawki jest większy niż jakakolwiek "
+    "przewaga zmierzona w tym projekcie; wartość pojawia się w promocjach i "
+    "w polskich kursach, które nie nadążyły za ruchem ostrej linii.",
 )
 
 Verdict = Literal["PLAY", "NO BET", "STALE", "NO ANCHOR", "UNVERIFIED"]

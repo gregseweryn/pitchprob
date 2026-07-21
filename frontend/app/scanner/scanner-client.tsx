@@ -26,22 +26,32 @@ import {
 } from "@/components/ui";
 
 const MARKETS = [
-  { id: "1x2", label: "1X2", selections: ["home", "draw", "away"], line: false },
-  { id: "ou", label: "Over/Under", selections: ["over", "under"], line: true },
-  { id: "ah", label: "Asian handicap", selections: ["home", "away"], line: true },
+  { id: "1x2", label: "1X2 (gospodarz/remis/gość)", selections: ["home", "draw", "away"], line: false },
+  { id: "ou", label: "Powyżej/poniżej goli", selections: ["over", "under"], line: true },
+  { id: "ah", label: "Handicap azjatycki", selections: ["home", "away"], line: true },
   {
     id: "corners_ou",
-    label: "Corners O/U",
+    label: "Rożne — powyżej/poniżej",
     selections: ["over", "under"],
     line: true,
   },
   {
     id: "corners_ah",
-    label: "Corners handicap",
+    label: "Rożne — handicap",
     selections: ["home", "away"],
     line: true,
   },
 ] as const;
+
+/** Selection values are the API's contract (ADR 0013); only the label the
+ * operator reads is Polish. */
+const SELECTION_LABELS: Record<string, string> = {
+  home: "gospodarz",
+  draw: "remis",
+  away: "gość",
+  over: "powyżej",
+  under: "poniżej",
+};
 
 type QuoteRow = {
   bookmaker: string;
@@ -63,15 +73,15 @@ function AnchorHeader({ result }: { result: ScanResponse }) {
   if (!anchor) {
     return (
       <p className="max-w-[70ch] text-sm text-ink-muted">
-        The tape has no complete Pinnacle market for{" "}
+        Taśma nie ma kompletnego rynku Pinnacle&apos;a dla{" "}
         <span className="num">
           {result.market}
           {result.line ? ` ${result.line}` : ""}
         </span>{" "}
-        on this fixture, so every quote below reads{" "}
-        <span className="num">NO ANCHOR</span>. That is a refusal, not a
-        failure: comparing against a neighbouring line would be a wrong
-        answer rather than a missing one.
+        dla tego meczu, więc każdy kurs poniżej dostaje{" "}
+        <span className="num">BRAK KOTWICY</span>. To odmowa, nie awaria:
+        porównanie z sąsiednią linią byłoby <em>złą</em> odpowiedzią zamiast
+        brakującej.
       </p>
     );
   }
@@ -80,31 +90,31 @@ function AnchorHeader({ result }: { result: ScanResponse }) {
     <StatList
       items={[
         {
-          label: "Sharp anchor",
+          label: "Kotwica (ostra cena)",
           value: `${anchor.bookmaker} ${fmtPrice(Number(anchor.price))}`,
         },
         {
-          label: "De-margined fair",
+          label: "Fair bez marży",
           value: pct(anchor.fair_probability),
-          hint: "Shin, from the complete market",
+          hint: "metoda Shina, z kompletnego rynku",
         },
         {
-          label: "Observed",
+          label: "Zaobserwowano",
           value: (
             <span className={cx(stale && "text-brick")}>
               {ageLabel(anchor.age_hours)}
             </span>
           ),
           hint: stale
-            ? "Older than 30h — verdicts downgrade to STALE"
+            ? "Ponad 30 h — werdykty spadają do NIEAKTUALNE"
             : new Date(anchor.observed_at).toISOString().slice(0, 16) + "Z",
         },
         ...(result.model_probability != null
           ? [
               {
-                label: "Model fair",
+                label: "Fair modelu",
                 value: pct(result.model_probability),
-                hint: "Informational only — it never flips a verdict",
+                hint: "tylko informacyjnie — nigdy nie odwraca werdyktu",
               },
             ]
           : []),
@@ -119,13 +129,13 @@ function VerdictTable({ result }: { result: ScanResponse }) {
       <table className="w-full min-w-[46rem] text-sm">
         <thead>
           <tr className="border-b border-line text-left text-xs text-ink-muted">
-            <th className="pb-2 font-medium">verdict</th>
-            <th className="pb-2 font-medium">book</th>
-            <th className="pb-2 text-right font-medium">quoted</th>
-            <th className="pb-2 text-right font-medium">effective</th>
-            <th className="pb-2 text-right font-medium">edge</th>
-            <th className="pb-2 text-right font-medium">promo</th>
-            <th className="pb-2 text-right font-medium">vs model</th>
+            <th className="pb-2 font-medium">werdykt</th>
+            <th className="pb-2 font-medium">bukmacher</th>
+            <th className="pb-2 text-right font-medium">kurs</th>
+            <th className="pb-2 text-right font-medium">efektywny</th>
+            <th className="pb-2 text-right font-medium">przewaga</th>
+            <th className="pb-2 text-right font-medium">promocja</th>
+            <th className="pb-2 text-right font-medium">wg modelu</th>
           </tr>
         </thead>
         <tbody>
@@ -137,10 +147,10 @@ function VerdictTable({ result }: { result: ScanResponse }) {
               <td className="py-2">
                 {verdict.bookmaker}
                 {verdict.tax_free ? (
-                  <span className="ml-1.5 text-xs text-ink-muted">tax-free</span>
+                  <span className="ml-1.5 text-xs text-ink-muted">bez podatku</span>
                 ) : null}
                 {verdict.boosted ? (
-                  <span className="ml-1.5 text-xs text-ink-muted">boosted</span>
+                  <span className="ml-1.5 text-xs text-ink-muted">boost</span>
                 ) : null}
                 {verdict.source === "feed" ? (
                   <span className="ml-1.5 text-xs text-ink-muted">feed</span>
@@ -226,7 +236,7 @@ export function ScannerClient() {
           boosted_price: row.boostedPrice.trim() || null,
         }));
       if (quotes.length === 0) {
-        throw new Error("Add at least one book and price.");
+        throw new Error("Dodaj przynajmniej jednego bukmachera i kurs.");
       }
       setResult(
         await postScan({
@@ -249,31 +259,29 @@ export function ScannerClient() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Scanner</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Skaner</h1>
         <p className="mt-1 max-w-[70ch] text-sm text-ink-muted">
-          Type the prices you can see at Polish books; each is verdicted
-          against the live Pinnacle fair from the odds tape, on effective
-          prices after the 12% turnover tax. Expect NO BET — that is the
-          honest answer most of the time.
+          Wpisz kursy, które widzisz u polskich bukmacherów. Każdy zostanie
+          porównany z ceną Pinnacle&apos;a bez marży, na kursach efektywnych
+          po 12% podatku. Spodziewaj się „nie graj” — to najczęstsza i
+          uczciwa odpowiedź.
         </p>
       </div>
 
       {events !== null && events.length === 0 ? (
-        <Panel title="No fixtures on the tape">
+        <Panel title="Brak meczów na taśmie">
           <p className="max-w-[70ch] text-sm text-ink-muted">
-            The scanner anchors on the odds tape, and the tape has no upcoming
-            fixtures right now. Record a snapshot with{" "}
-            <code className="num">pitchprob record-odds --league all</code>,
-            merge it with <code className="num">pitchprob import-tape</code>,
-            then reload. Without an anchor the scanner will not guess.
+            Skaner opiera się na taśmie kursów, a taśma nie ma teraz żadnych
+            nadchodzących meczów. Zwykle znaczy to, że sezon jeszcze się nie
+            zaczął. Bez kotwicy skaner nie będzie zgadywał.
           </p>
         </Panel>
       ) : null}
 
-      <Panel title="Selection">
+      <Panel title="Co sprawdzamy">
         <div className="flex flex-col gap-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Fixture">
+            <Field label="Mecz">
               <Select
                 value={eventId}
                 onChange={(event) => setEventId(event.target.value)}
@@ -288,7 +296,7 @@ export function ScannerClient() {
                 {events === null ? <option>loading…</option> : null}
               </Select>
             </Field>
-            <Field label="Market">
+            <Field label="Rynek">
               <Select
                 value={market}
                 onChange={(event) => chooseMarket(event.target.value)}
@@ -300,19 +308,19 @@ export function ScannerClient() {
                 ))}
               </Select>
             </Field>
-            <Field label="Selection">
+            <Field label="Typ">
               <Select
                 value={selection}
                 onChange={(event) => setSelection(event.target.value)}
               >
                 {spec.selections.map((name) => (
                   <option key={name} value={name}>
-                    {name}
+                    {SELECTION_LABELS[name] ?? name}
                   </option>
                 ))}
               </Select>
             </Field>
-            <Field label={spec.line ? "Line (must match the tape)" : "Line (n/a)"}>
+            <Field label={spec.line ? "Linia (musi zgadzać się z taśmą)" : "Linia (nie dotyczy)"}>
               <Input
                 value={line}
                 onChange={(event) => setLine(event.target.value)}
@@ -325,9 +333,9 @@ export function ScannerClient() {
 
           <div className="border-t border-line pt-4">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
-              <h4 className="text-sm font-medium">Quotes you can see</h4>
+              <h4 className="text-sm font-medium">Kursy, które widzisz</h4>
               <span className="text-xs text-ink-muted">
-                one row per book; leave blank to skip
+                jeden wiersz na bukmachera; puste pomijamy
               </span>
             </div>
             <div className="mt-3 flex flex-col gap-2">
@@ -339,18 +347,18 @@ export function ScannerClient() {
                   {/* Labels only on the first row: repeating them down a
                       list is noise. Every input keeps its own aria-label so
                       the pairing survives for screen readers. */}
-                  <Field label="Book" repeat={index > 0}>
+                  <Field label="Bukmacher" repeat={index > 0}>
                     <Input
                       value={row.bookmaker}
                       onChange={(event) =>
                         updateRow(index, { bookmaker: event.target.value })
                       }
                       placeholder="betclic"
-                      aria-label={`Bookmaker, row ${index + 1}`}
+                      aria-label={`Bukmacher, wiersz ${index + 1}`}
                       className="!font-sans"
                     />
                   </Field>
-                  <Field label="Price" repeat={index > 0}>
+                  <Field label="Kurs" repeat={index > 0}>
                     <Input
                       value={row.price}
                       onChange={(event) =>
@@ -358,10 +366,10 @@ export function ScannerClient() {
                       }
                       placeholder="2.10"
                       inputMode="decimal"
-                      aria-label={`Quoted price, row ${index + 1}`}
+                      aria-label={`Kurs, wiersz ${index + 1}`}
                     />
                   </Field>
-                  <Field label="Boosted to" repeat={index > 0}>
+                  <Field label="Boost do" repeat={index > 0}>
                     <Input
                       value={row.boostedPrice}
                       onChange={(event) =>
@@ -369,7 +377,7 @@ export function ScannerClient() {
                       }
                       placeholder="—"
                       inputMode="decimal"
-                      aria-label={`Boosted price, row ${index + 1}`}
+                      aria-label={`Kurs po boostzie, wiersz ${index + 1}`}
                     />
                   </Field>
                   <label className="flex h-9 items-center gap-2 text-sm sm:mt-[1.375rem]">
@@ -379,10 +387,10 @@ export function ScannerClient() {
                       onChange={(event) =>
                         updateRow(index, { taxFree: event.target.checked })
                       }
-                      aria-label={`Tax-free promo, row ${index + 1}`}
+                      aria-label={`Promocja bez podatku, wiersz ${index + 1}`}
                       className="size-4 accent-[var(--gold-ink)]"
                     />
-                    tax-free
+                    bez podatku
                   </label>
                 </div>
               ))}
@@ -393,7 +401,7 @@ export function ScannerClient() {
                 type="button"
                 onClick={() => setRows((current) => [...current, { ...EMPTY_ROW }])}
               >
-                Add a book
+                Dodaj bukmachera
               </Button>
               {rows.length > 1 ? (
                 <Button
@@ -401,11 +409,11 @@ export function ScannerClient() {
                   type="button"
                   onClick={() => setRows((current) => current.slice(0, -1))}
                 >
-                  Remove last
+                  Usuń ostatni
                 </Button>
               ) : null}
               <div className="ml-auto flex items-end gap-3">
-                <Field label="Model fair (optional)">
+                <Field label="Fair modelu (opcjonalnie)">
                   <Input
                     value={modelProb}
                     onChange={(event) => setModelProb(event.target.value)}
@@ -415,7 +423,7 @@ export function ScannerClient() {
                   />
                 </Field>
                 <Button onClick={submit} disabled={loading}>
-                  {loading ? "Verdicting…" : "Verdict these quotes"}
+                  {loading ? "Liczę…" : "Sprawdź te kursy"}
                 </Button>
               </div>
             </div>
@@ -426,7 +434,7 @@ export function ScannerClient() {
       {error ? <ErrorBanner message={error} /> : null}
 
       {loading ? (
-        <Panel title="Verdicts">
+        <Panel title="Werdykty">
           <div className="flex flex-col gap-2" aria-busy="true">
             {[0, 1].map((row) => (
               <div
@@ -444,10 +452,10 @@ export function ScannerClient() {
             title={`${result.home_team} v ${result.away_team} — ${result.market}${
               result.line ? ` ${result.line}` : ""
             } ${result.selection}`}
-            footnote={`Kickoff ${new Date(result.commence_time)
+            footnote={`Początek ${new Date(result.commence_time)
               .toISOString()
               .replace("T", " ")
-              .slice(0, 16)} UTC · tape event ${result.event_id}`}
+              .slice(0, 16)} UTC · mecz ${result.event_id}`}
           >
             <div className="flex flex-col gap-5">
               <AnchorHeader result={result} />
@@ -459,14 +467,14 @@ export function ScannerClient() {
       ) : null}
 
       {!result && !loading && !error ? (
-        <Panel title="Nothing verdicted yet">
+        <Panel title="Nic jeszcze nie sprawdzone">
           <p className="max-w-[70ch] text-sm text-ink-muted">
-            Pick a fixture and market, type at least one price, and the
-            scanner will price it against the tape. It compares{" "}
-            <em>effective</em> prices: a taxed quote of 2.10 pays 1.85, so
-            most quotes lose to the sharp fair before any edge is discussed.
-            Value tends to show up in promotions and in prices that have not
-            yet followed a sharp move.
+            Wybierz mecz i rynek, wpisz choć jeden kurs, a skaner porówna go
+            z taśmą. Porównuje kursy <em>efektywne</em>: kurs 2.10 z podatkiem
+            płaci realnie 1.85, więc większość kursów przegrywa z ceną ostrą,
+            zanim w ogóle zacznie się mówić o przewadze. Wartość pojawia się
+            zwykle w promocjach i w kursach, które nie nadążyły za ruchem
+            ostrej linii.
           </p>
         </Panel>
       ) : null}

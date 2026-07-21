@@ -50,38 +50,38 @@ export default async function BacktestsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Backtests</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Backtesty</h1>
         <p className="mt-1 max-w-[65ch] text-sm text-ink-muted">
-          Every stored walk-forward run — the model against the margin-removed closing
-          line, and what flat staking would have done. Sub-lines are block-bootstrap
-          95% CIs; sharp CLV (vs the Pinnacle close fair) is the timing-only endpoint
-          of ADR 0011 — exec CLV without it is line shopping. Negative ROI rows are
-          the honest ones.
+          Każdy zapisany przebieg walk-forward — model przeciwko cenie zamknięcia bez
+          marży i to, co dałoby płaskie obstawianie. Mniejsze liczby pod spodem to
+          przedziały ufności 95%. CLV ostre mierzy samo wyczucie czasu; CLV wykonane
+          bez niego to tylko wybór lepszego bukmachera. Wiersze z ujemnym ROI są tymi
+          uczciwymi.
         </p>
       </div>
 
       {apiError ? (
         <p className="rounded-md border border-brick/30 bg-brick-soft px-4 py-3 text-sm text-brick">
-          The pitchprob API is not reachable ({apiError}).
+          Nie mogę połączyć się z API ({apiError}).
         </p>
       ) : rows.length === 0 ? (
         <Panel>
           <p className="text-sm text-ink-muted">
-            No backtests stored yet. Run one from the CLI, e.g.{" "}
+            Nie zapisano jeszcze żadnego backtestu. Uruchom go z terminala, np.{" "}
             <code className="num">
               uv run pitchprob backtest --league E0 --start 2021-08-01
             </code>{" "}
-            — results land here.
+            — wyniki pojawią się tutaj.
           </p>
         </Panel>
       ) : (
         <div className="flex flex-col gap-3">
         {rows.some((row) => !(row.metrics as Metrics).staking_flat?.clv_sharp_ci) ? (
           <p className="max-w-[70ch] text-xs leading-relaxed text-ink-muted">
-            Blank sharp-CLV and CI cells are runs recorded before ADR 0011
-            added the two-label decomposition — the numbers were never
-            computed for them, so the columns are empty rather than zero.
-            Re-run those configurations to fill them in.
+            Puste komórki „CLV ostre” i przedziałów to przebiegi zapisane, zanim
+            dołożono rozbicie CLV na dwie etykiety — tych liczb po prostu nigdy dla
+            nich nie policzono, więc kolumny są puste, a nie zerowe. Powtórz te
+            przebiegi, żeby je uzupełnić.
           </p>
         ) : null}
         <div className="overflow-x-auto rounded-md border border-line">
@@ -89,18 +89,18 @@ export default async function BacktestsPage() {
             <thead>
               <tr className="bg-surface text-left text-xs text-ink-muted">
                 {[
-                  "run",
-                  "league",
+                  "przebieg",
+                  "liga",
                   "model",
-                  "selector",
-                  "preds",
+                  "selektor",
+                  "prognoz",
                   "log-loss",
                   "RPS",
-                  "closing RPS",
-                  "bets",
+                  "RPS zamknięcia",
+                  "zakładów",
                   "ROI",
-                  "exec CLV",
-                  "sharp CLV",
+                  "CLV wykon.",
+                  "CLV ostre",
                 ].map((label, i) => (
                   <th
                     key={label}

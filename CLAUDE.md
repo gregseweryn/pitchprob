@@ -240,7 +240,13 @@ spend decision; (b) extend `_ODDS_API_OVERRIDES` in `data/normalize.py`
 from the first real "unmatched" reports once the season starts.
 
 **User context:** Polish operator — PL-licensed books only, communicates in
-Polish (docs/code stay English). See the memory directory for details.
+Polish. Docs, code, tests and API verdict *values* stay English; the
+**dashboard's operator-facing copy is Polish** (frontend/PRODUCT.md records
+the rule), including the caveat payloads in `SCANNER_CAVEATS` /
+`LEDGER_CAVEATS`. `/jak-to-dziala` explains, in Polish, why the model does
+not drive the verdict — the operator asked "when does the model say to
+bet?", and the honest answer (never; the sharp price decides) needed a
+place in the product, not just in the README.
 
 Open research lanes (evidence-gated): CLV-conditioned training,
 player-weighted absences (needs paid data), corners/cards market validation

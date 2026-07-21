@@ -15,6 +15,13 @@ Two surfaces read the *forward* program rather than the model: the
 de-margined Pinnacle fair, and the **ledger** shows real-money picks with
 their CLV decomposition, the weekly report and the risk layer's state.
 
+## Language
+
+Operator-facing copy is **Polish** — the operator is the only user and reads
+this surface weekly. Code, comments, tests and docs stay English, and so do
+the API's verdict values (`PLAY`, `NO ANCHOR`, …), which are a contract;
+only the label rendered next to them is translated.
+
 ## Who uses it, where
 
 One person at a desk with coffee, weekend mornings, reading probability
