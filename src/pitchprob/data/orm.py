@@ -261,6 +261,13 @@ class Pick(Base):
 
     notes: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
+    # Phase 3 risk layer (ADR 0015). An override that leaves no trace is
+    # worse than no circuit breaker, so the bypass is a column on the bet
+    # itself and `risk_note` records which limits were breached — the
+    # weekly report reads these back rather than trusting memory.
+    risk_override: Mapped[bool] = mapped_column(Boolean, default=False)
+    risk_note: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
 
 class QuoteCheck(Base):
     """One operator sighting of a price, against what the feed claimed.

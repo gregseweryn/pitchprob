@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from pitchprob.betting.risk import RiskLimits
 from pitchprob.data.orm import Base, League, Match, OddsTick, Pick, Season, Team
 from pitchprob.services.ledger import (
     attach_clv,
@@ -76,8 +77,26 @@ def _seed_1x2(session: Session) -> None:
     session.flush()
 
 
+#: These tests predate the Phase 3 risk layer and exercise ledger mechanics
+#: — tax-free allowance, settlement, the CLV decomposition — which
+#: deliberately stack several bets on one fixture and use stakes far outside
+#: the 2-5 PLN band. They opt out of the limits explicitly rather than being
+#: rewritten around them; the limits themselves are covered in
+#: tests/betting/test_risk.py and tests/services/test_ledger_risk.py.
+_UNLIMITED = RiskLimits(
+    bankroll_pln=Decimal("500"),
+    min_stake_pln=Decimal("0.01"),
+    max_stake_pln=Decimal("100000"),
+    max_match_stake_pln=Decimal("100000"),
+    max_daily_stake_pln=Decimal("100000"),
+    max_open_picks=100000,
+    max_drawdown_pln=Decimal("100000"),
+)
+
+
 def _log_over_pick(session: Session, **overrides: object) -> Pick:
     params: dict[str, object] = {
+        "limits": _UNLIMITED,
         "home_team": "Arsenal",
         "away_team": "Coventry City",
         "kickoff_utc": _KICKOFF,

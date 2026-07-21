@@ -71,7 +71,7 @@ uv run pitchprob predict --league E0 --home "Manchester City" --away "Chelsea" \
     --odds 1.55,4.4,5.9
 uv run pitchprob backtest --league E0 --start 2021-08-01
 make serve                      # FastAPI on :8000, OpenAPI docs at /docs
-make check                      # ruff + mypy --strict + 568 tests
+make check                      # ruff + mypy --strict + 618 tests
 ```
 
 Example output (real run, July 2026):
@@ -495,6 +495,53 @@ missing-or-stale. Until then `pitchprob scan --feed` returns **UNVERIFIED**
 where it would otherwise say PLAY — the edge is still computed, because the
 lead is real; the authorisation is not.
 
+#### The risk layer: what the ledger refuses (ADR 0015)
+
+Phase 3, on the agreed parameters — flat 2-5 PLN stakes, 500 PLN notional
+bankroll. The obvious framing is the wrong one: at these stakes the roll
+carries 100-250 bets, so **ruin is not the risk being managed**. Two others
+are, and they set the thresholds.
+
+The first is statistical. CLV is reported with a block bootstrap over ISO
+weeks, which can price dependence between weeks but is blind to dependence
+*inside* a fixture. Two bets on one match share the match, the team news and
+usually the same price move — they enter the sample as two observations
+while carrying about one observation of information, and the interval comes
+out too narrow. So the per-fixture cap is set equal to the single-stake cap:
+**one bet per fixture, enforced rather than intended.**
+
+| limit | value | |
+|---|---|---|
+| stake band | 2-5 PLN | the program parameter |
+| per fixture | 5 PLN | one bet per match |
+| per day | 25 PLN | 5% of bankroll, ~5 bets |
+| open picks | 15 | 75 PLN in flight |
+| drawdown stop | 75 PLN | 15% of bankroll |
+
+The second is fault detection: the likeliest way the season goes wrong is a
+bug, not variance. The drawdown breaker is a smoke alarm, and it measures
+**realized** P&L over settled picks in settlement order — open bets are
+excluded, because counting positions that may still win would put 75 PLN of
+phantom drawdown on the books, which is the entire threshold.
+
+```bash
+uv run pitchprob risk status     # every limit, and how close the breaker is
+uv run pitchprob risk report     # the weekly "what the tape says"
+```
+
+A refused bet writes nothing. `--override-risk` places it anyway and stamps
+the reason permanently on the pick, which the weekly report reads back — an
+override that leaves no trace is worse than having no breaker, because it
+makes the season unauditable while creating the impression of control.
+
+The weekly report covers money over seven days and CLV over the whole
+ledger, and **publishes no confidence interval below four distinct ISO weeks
+of bets**: a bootstrap resampling one block returns that block every time,
+so the "95% CI" collapses to zero width — the most confident-looking output
+in the system, produced by the least evidence. It prints the means and marks
+the section *not a finding*, the same way the latency map states its
+resolution floor.
+
 ### M2 results: does the ML layer help? (same protocol, 28-day refits)
 
 | E0 2021–26, closing-odds subset (n=1730) | log-loss | RPS | ECE (home) |
@@ -543,12 +590,12 @@ src/pitchprob/
 
 Postgres 16 is the system of record (long-format odds/predictions, ADR 0003) with
 Alembic migrations; the code is dialect-portable and runs unmodified on SQLite for
-zero-dependency development. See `docs/adr/` for the 14 architecture decision
+zero-dependency development. See `docs/adr/` for the 15 architecture decision
 records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing
 
-568 tests: hand-computed reference values for every formula, hypothesis property tests
+618 tests: hand-computed reference values for every formula, hypothesis property tests
 (market partitions sum to 1, quarter-line AH EV ≡ mean of adjacent half lines, Shin
 books renormalize, realized settlement ≡ the probability-side markets module
 cell-for-cell, block-bootstrap scale equivariance), analytic-vs-numeric gradient

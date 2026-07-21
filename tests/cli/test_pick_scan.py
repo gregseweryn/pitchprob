@@ -142,7 +142,10 @@ class TestPickCommands:
             assert pick.event_id == "ev1"
             assert pick.price_sharp == Decimal("1.89")
 
-    def test_log_warns_outside_program_stakes(self, cli_env) -> None:
+    def test_log_refuses_a_stake_outside_the_program_band(self, cli_env) -> None:
+        """Phase 3 (ADR 0015) turned this from a warning into a refusal: a
+        50 PLN bet on a 500 PLN bankroll is not a large bet, it is a
+        different experiment."""
         _seed_totals_tape()
         result = runner.invoke(
             cli_main.app,
@@ -152,8 +155,29 @@ class TestPickCommands:
                 "--book", "sts", "--stake", "50", "--price", "2.10",
             ],
         )
+        assert result.exit_code != 0
+        assert "max_stake" in result.output
+        with db.session_scope() as session:
+            assert session.execute(select(Pick)).scalars().all() == []
+
+    def test_an_override_places_the_bet_and_says_so(self, cli_env) -> None:
+        _seed_totals_tape()
+        result = runner.invoke(
+            cli_main.app,
+            [
+                "pick", "log", "--match", "arsenal",
+                "--market", "ou", "--selection", "over", "--line", "3.0",
+                "--book", "sts", "--stake", "50", "--price", "2.10",
+                "--override-risk",
+            ],
+        )
         assert result.exit_code == 0, result.output
+        assert "RISK OVERRIDE" in result.output
         assert "outside the 2-5 PLN" in result.output
+        with db.session_scope() as session:
+            pick = session.execute(select(Pick)).scalars().one()
+            assert pick.risk_override is True
+            assert pick.risk_note is not None and "max_stake" in pick.risk_note
 
     def test_log_refuses_tax_free_beyond_allowance(self, cli_env) -> None:
         _seed_totals_tape()
@@ -162,8 +186,11 @@ class TestPickCommands:
             "--market", "ou", "--selection", "over", "--line", "3.0",
             "--book", "betclic", "--price", "2.10", "--tax-free",
         ]
+        # Exhausting a 1,000 PLN allowance needs a stake the risk layer would
+        # otherwise refuse, so this arm overrides it deliberately — the
+        # allowance guard is what is under test here, not the limits.
         assert runner.invoke(
-            cli_main.app, [*base, "--stake", "998"]
+            cli_main.app, [*base, "--stake", "998", "--override-risk"]
         ).exit_code == 0
         result = runner.invoke(cli_main.app, [*base, "--stake", "5"])
         assert result.exit_code != 0

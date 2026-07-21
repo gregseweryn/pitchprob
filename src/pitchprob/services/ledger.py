@@ -34,6 +34,18 @@ from pitchprob.betting.effective import (
     TaxFreeAllowance,
     effective_price,
 )
+from pitchprob.betting.risk import (
+    DEFAULT_BANKROLL_PLN,
+    DEFAULT_LIMITS,
+    DrawdownState,
+    ExposureState,
+    RiskLimits,
+    RiskRefusal,
+    breaker_tripped,
+    check_exposure,
+    describe_violations,
+    drawdown_state,
+)
 from pitchprob.betting.settlement import (
     AhSide,
     MatchSelection,
@@ -93,6 +105,122 @@ def tax_free_allowance(
     return TaxFreeAllowance(limit=limit, used=Decimal(used))
 
 
+def exposure_state(
+    session: Session,
+    *,
+    event_id: str | None,
+    home_team: str,
+    away_team: str,
+    kickoff_utc: datetime,
+    placed_at: datetime,
+) -> ExposureState:
+    """What the ledger already carries, as of a candidate bet (ADR 0015).
+
+    The fixture is identified by tape event id when there is one and by
+    teams-plus-kickoff-date otherwise: manually logged picks carry no event
+    id, and without the fallback the one-bet-per-fixture rule would have a
+    hole exactly where the operator types things by hand.
+
+    The daily window is the UTC calendar day of *placement* — the day the
+    money left, not the day the matches are played.
+    """
+    match_filter = (
+        Pick.event_id == event_id
+        if event_id is not None
+        else (
+            (Pick.home_team == home_team)
+            & (Pick.away_team == away_team)
+            & (Pick.kickoff_utc >= kickoff_utc - timedelta(days=1))
+            & (Pick.kickoff_utc <= kickoff_utc + timedelta(days=1))
+        )
+    )
+    match_stake = session.execute(
+        select(func.coalesce(func.sum(Pick.stake_pln), 0)).where(match_filter)
+    ).scalar_one()
+
+    day_start = as_utc(placed_at).replace(hour=0, minute=0, second=0, microsecond=0)
+    daily_stake = session.execute(
+        select(func.coalesce(func.sum(Pick.stake_pln), 0)).where(
+            Pick.placed_at >= day_start,
+            Pick.placed_at < day_start + timedelta(days=1),
+        )
+    ).scalar_one()
+
+    open_picks = session.execute(
+        select(func.count()).select_from(Pick).where(Pick.settled_at.is_(None))
+    ).scalar_one()
+
+    return ExposureState(
+        match_stake_pln=Decimal(match_stake),
+        daily_stake_pln=Decimal(daily_stake),
+        open_picks=int(open_picks),
+    )
+
+
+def realized_drawdown(
+    session: Session, *, bankroll: Decimal = DEFAULT_BANKROLL_PLN
+) -> DrawdownState:
+    """Peak-to-current drawdown of realized P&L across settled picks.
+
+    Open picks are excluded on purpose: an unsettled bet has no realized
+    result, and treating it as a loss would trip the breaker on positions
+    that may still win.
+    """
+    rows = session.execute(
+        select(Pick.settled_at, Pick.gross_return_pln, Pick.stake_pln).where(
+            Pick.settled_at.is_not(None), Pick.gross_return_pln.is_not(None)
+        )
+    ).all()
+    return drawdown_state(
+        [
+            (as_utc(settled_at), Decimal(gross) - Decimal(stake))
+            for settled_at, gross, stake in rows
+        ],
+        bankroll=bankroll,
+    )
+
+
+def _risk_check(
+    session: Session,
+    *,
+    event_id: str | None,
+    home_team: str,
+    away_team: str,
+    kickoff_utc: datetime,
+    placed_at: datetime,
+    stake_pln: Decimal,
+    limits: RiskLimits,
+) -> str | None:
+    """The reason this bet should not be placed, or None. Never raises.
+
+    Returning the reason rather than raising is what lets ``log_pick``
+    record it on an overridden pick: the same sentence the operator was
+    shown when they chose to bypass it.
+    """
+    reasons: list[str] = []
+    state = exposure_state(
+        session,
+        event_id=event_id,
+        home_team=home_team,
+        away_team=away_team,
+        kickoff_utc=kickoff_utc,
+        placed_at=placed_at,
+    )
+    violations = check_exposure(state, stake_pln, limits=limits)
+    if violations:
+        reasons.append(describe_violations(violations))
+    drawdown = realized_drawdown(session, bankroll=limits.bankroll_pln)
+    if breaker_tripped(drawdown, limits=limits):
+        reasons.append(
+            f"drawdown circuit breaker: realized drawdown "
+            f"{drawdown.drawdown_pln:.2f} PLN has reached the stop "
+            f"{limits.max_drawdown_pln:.2f} PLN "
+            f"(equity {drawdown.equity_pln:.2f} of peak "
+            f"{drawdown.peak_equity_pln:.2f})"
+        )
+    return "; ".join(reasons) if reasons else None
+
+
 def log_pick(
     session: Session,
     *,
@@ -109,6 +237,8 @@ def log_pick(
     placed_at: datetime | None = None,
     event_id: str | None = None,
     notes: str | None = None,
+    limits: RiskLimits = DEFAULT_LIMITS,
+    override_risk: bool = False,
 ) -> Pick:
     """Record one executed bet; auto-fill the sharp anchor from the tape.
 
@@ -116,6 +246,12 @@ def log_pick(
     full (see ``TaxFreeAllowance``) — beyond it Betclic's promo demands a
     >=50%-odds AKO, which a single cannot meet, so the ledger refuses rather
     than silently mispricing the payout.
+
+    The Phase 3 risk layer (ADR 0015) gates the write: exposure limits and
+    the drawdown circuit breaker raise ``RiskRefusal`` and no row is
+    created. ``override_risk`` bypasses them deliberately — and is stamped
+    on the pick together with the reason, so the weekly report can count
+    overrides instead of the operator having to remember them.
     """
     _validate_bet(market, selection, line, stake_pln, price_quoted)
     if tax_free:
@@ -127,6 +263,21 @@ def log_pick(
                 "log the pick as taxed instead"
             )
     when = placed_at if placed_at is not None else datetime.now(tz=UTC)
+    refusal = _risk_check(
+        session,
+        event_id=event_id,
+        home_team=home_team,
+        away_team=away_team,
+        kickoff_utc=kickoff_utc,
+        placed_at=when,
+        stake_pln=stake_pln,
+        limits=limits,
+    )
+    if refusal is not None and not override_risk:
+        raise RiskRefusal(
+            f"{refusal}. Place it anyway only on purpose: override_risk=True "
+            "(CLI: --override-risk), which marks the pick permanently."
+        )
     price_sharp: Decimal | None = None
     sharp_observed_at: datetime | None = None
     if event_id is not None:
@@ -154,6 +305,11 @@ def log_pick(
         price_sharp=price_sharp,
         sharp_observed_at=sharp_observed_at,
         notes=notes,
+        # A clean pick is never marked as an override, even when the flag
+        # was passed: the mark means "this bet broke a limit", not "the
+        # operator had the flag switched on".
+        risk_override=refusal is not None,
+        risk_note=refusal,
     )
     session.add(pick)
     session.flush()

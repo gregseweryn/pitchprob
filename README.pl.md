@@ -54,6 +54,11 @@ Pełna dokumentacja techniczna z tabelami wyników: [README.md](README.md)
   ostrej linii najpóźniej. `pitchprob oddsio` + `pitchprob quote-check`
   to prototyp feedu odds-api.io (Betclic PL + STS PL) — **informacyjny**,
   dopóki ręczna walidacja go nie dopuści.
+- **Warstwa ryzyka (faza 3, ADR 0015)**: limity ekspozycji i bezpiecznik
+  obsunięcia wpięte w `pick log` — odrzucony zakład nie zapisuje się wcale,
+  a `--override-risk` stawia go mimo to i **trwale znakuje picka** powodem.
+  `pitchprob risk status|report` pokazuje stan limitów i cotygodniowy raport
+  „co mówi taśma".
 - **Interfejsy**: dashboard Next.js (wycena meczów, kupony, historia
   backtestów) + API FastAPI + CLI Typer. `make stack-up` → :3000/:8000.
 
@@ -125,6 +130,8 @@ uv run pitchprob record-corners --league E0       # rożne, T-26h (~1 kredyt/mec
 uv run pitchprob study latency                    # kto kopiuje ostrą linię najpóźniej
 uv run pitchprob oddsio books --filter PL         # katalog buków PL (bez klucza)
 uv run pitchprob quote-check report               # czy feed zasłużył na zaufanie
+uv run pitchprob risk status                     # limity i stan bezpiecznika
+uv run pitchprob risk report                     # cotygodniowe „co mówi taśma"
 
 # skaner: podajesz kursy, które widzisz u polskich buków
 uv run pitchprob scan "arsenal" --market ou --selection over --line 3.0 \
@@ -143,6 +150,27 @@ spada do 1,80, czyli **−9,8%** (nie graj). Skaner odmawia też werdyktu,
 gdy taśma nie kwotuje tej samej linii (**NO ANCHOR**) i degraduje „graj" do
 **STALE**, gdy kotwica ma ponad 30 godzin — świeżość kwotowania jest
 drukowana przy każdym werdykcie, bo taśma nagrywa raz dziennie.
+
+### Po co są limity — bo nie po to, po co się zwykle myśli
+
+Przy stawkach 2–5 PLN i bankrollu 500 PLN **ruina nie jest ryzykiem** —
+to 100–250 zakładów zapasu. Limity chronią co innego. Po pierwsze próbkę:
+CLV raportujemy block bootstrapem po tygodniach ISO, który widzi zależność
+*między* tygodniami, ale jest ślepy na zależność *wewnątrz* meczu. Dwa
+zakłady na ten sam mecz wchodzą do próbki jako dwie obserwacje, niosąc
+informację mniej więcej jednej — i przedział ufności wychodzi za wąski.
+Dlatego limit na mecz równa się limitowi pojedynczej stawki: **jeden zakład
+na mecz, egzekwowany, nie deklarowany.** Po drugie wykrycie błędu: sezon
+najpewniej zepsuje bug, nie wariancja, więc bezpiecznik obsunięcia (75 PLN,
+15% bankrolla) jest czujnikiem dymu, a nie ochroną kapitału. Liczy wyłącznie
+**zrealizowany** wynik rozliczonych zakładów — otwarte pozycje mogą jeszcze
+wygrać, a przy 15 otwartych piku byłoby to 75 PLN widmowego obsunięcia,
+czyli dokładnie cały próg.
+
+Raport tygodniowy **nie publikuje przedziału ufności poniżej czterech
+tygodni** zakładów: bootstrap losujący jeden blok zwraca ten sam blok za
+każdym razem, więc „95% CI" miałby zerową szerokość — najpewniej wyglądający
+wynik w całym systemie, wyprodukowany przez najmniej danych.
 
 ### Czego nie dało się zmierzyć — i dlaczego to jest w dokumentacji
 

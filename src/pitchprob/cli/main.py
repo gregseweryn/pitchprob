@@ -1016,6 +1016,14 @@ def pick_log(
         str | None, typer.Option(help="Bet execution time, ISO (default: now)")
     ] = None,
     notes: Annotated[str | None, typer.Option(help="Free-form note")] = None,
+    override_risk: Annotated[
+        bool,
+        typer.Option(
+            "--override-risk",
+            help="Place the bet even though it breaches an exposure limit or "
+                 "the drawdown breaker. The pick is marked permanently.",
+        ),
+    ] = False,
 ) -> None:
     """Log one executed real-money bet; the sharp anchor fills from the tape."""
     from decimal import Decimal
@@ -1069,6 +1077,7 @@ def pick_log(
                 ),
                 event_id=event_id,
                 notes=notes,
+                override_risk=override_risk,
             )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -1092,6 +1101,8 @@ def pick_log(
             typer.echo(
                 "no sharp anchor on the tape (CLV will need the event id)"
             )
+        if pick.risk_override:
+            typer.echo(f"RISK OVERRIDE recorded on this pick: {pick.risk_note}")
         if not Decimal("2") <= pick.stake_pln <= Decimal("5"):
             typer.echo(
                 f"warning: stake {pick.stake_pln} PLN is outside the 2-5 PLN "
@@ -1520,6 +1531,87 @@ def quote_check_report_command() -> None:
     with session_scope() as session:
         _verdicts, report = quote_check_report(session)
     typer.echo(report)
+
+
+# --- Phase 3: the risk layer (ADR 0015) ----------------------------------
+
+risk_app = typer.Typer(
+    no_args_is_help=True,
+    help="Exposure limits, the drawdown circuit breaker, and the weekly "
+         "'what the tape says' report.",
+)
+app.add_typer(risk_app, name="risk")
+
+
+@risk_app.command("status")
+def risk_status(
+    bankroll: Annotated[
+        float, typer.Option(help="Notional bankroll in PLN")
+    ] = 500.0,
+) -> None:
+    """Where the ledger stands against every limit, right now."""
+    from pitchprob.betting.risk import RiskLimits, breaker_tripped
+    from pitchprob.services.ledger import realized_drawdown
+
+    configure_logging(get_settings().log_level)
+    limits = RiskLimits.for_bankroll(Decimal(str(bankroll)))
+    with session_scope() as session:
+        drawdown = realized_drawdown(session, bankroll=limits.bankroll_pln)
+        tripped = breaker_tripped(drawdown, limits=limits)
+    typer.echo(
+        f"stake band {limits.min_stake_pln}-{limits.max_stake_pln} PLN | "
+        f"per match {limits.max_match_stake_pln} | "
+        f"per day {limits.max_daily_stake_pln} | "
+        f"open picks {limits.max_open_picks}"
+    )
+    typer.echo(
+        f"equity {drawdown.equity_pln:.2f} PLN (peak "
+        f"{drawdown.peak_equity_pln:.2f}) | drawdown "
+        f"{drawdown.drawdown_pln:.2f} of {limits.max_drawdown_pln:.2f} PLN "
+        f"({100 * drawdown.fraction_of(limits.bankroll_pln):.1f}% of bankroll)"
+    )
+    typer.echo(
+        "circuit breaker: TRIPPED — `pick log` refuses new bets "
+        "(--override-risk to bypass, and it will be recorded)"
+        if tripped
+        else "circuit breaker: open"
+    )
+
+
+@risk_app.command("report")
+def risk_report_command(
+    days: Annotated[int, typer.Option(help="Money window, in days")] = 7,
+    bankroll: Annotated[
+        float, typer.Option(help="Notional bankroll in PLN")
+    ] = 500.0,
+    out: Annotated[
+        str | None, typer.Option(help="Also write the markdown report here")
+    ] = None,
+) -> None:
+    """The weekly report: what the tape says about the bets you placed.
+
+    The money section covers the window; CLV covers the whole ledger,
+    because it is the decision variable and needs every observation. Below
+    four ISO weeks of bets no confidence interval is published — a bootstrap
+    over one block is a straight line, not an interval.
+    """
+    from pathlib import Path
+
+    from pitchprob.betting.risk import RiskLimits
+    from pitchprob.services.risk_report import weekly_report
+
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        result = weekly_report(
+            session,
+            now=datetime.now(tz=UTC),
+            days=days,
+            limits=RiskLimits.for_bankroll(Decimal(str(bankroll))),
+        )
+    if out is not None:
+        Path(out).write_text(result.report + "\n", encoding="utf-8")
+        typer.echo(f"report written to {out}")
+    typer.echo(result.report)
 
 
 def main() -> None:

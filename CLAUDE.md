@@ -18,8 +18,8 @@ OU/AH multi-market betting, block-bootstrap CIs, `pitchprob experiment
 run|compare` registry with paired significance). Data: 21,589 matches (top-5
 European leagues 2014/15–2025/26, football-data.co.uk; Pinnacle close covers
 20,733 and open 20,717 of them), 99.98% Understat xG coverage, 40,500
-API-Football injury records (seasons 2022–24). ~570 tests, mypy --strict,
-14 ADRs in `docs/adr/` (read them before changing anything they cover).
+API-Football injury records (seasons 2022–24). ~620 tests, mypy --strict,
+15 ADRs in `docs/adr/` (read them before changing anything they cover).
 
 The syndicate-transformation roadmap (approved 2026-07-18, plan file
 `~/.claude/plans/you-are-a-principal-proud-patterson.md`) continues: Phase 1
@@ -91,6 +91,7 @@ uv run pitchprob pick log|settle|list        # forward real-money CLV ledger
 uv run pitchprob record-corners --league E0  # corners tape, T-26h (ADR 0014)
 uv run pitchprob study latency               # who copies the sharp line last
 uv run pitchprob quote-check log|report      # validate the odds-api.io feed
+uv run pitchprob risk status|report          # limits, breaker, weekly report
 cd frontend && npm run dev               # dashboard against local API
 ```
 
@@ -187,16 +188,33 @@ in `.env` + repo secrets, and select Betclic PL + STS PL via
 `/bookmakers/selected/select`. Until then the feed and the latency map have
 no data; everything else runs.
 
-**Next task: Phase 3 risk layer** (flat 2-5 PLN stakes, notional 500 PLN
-bankroll — parameters agreed): exposure limits, drawdown circuit breaker,
-and the weekly "what the tape says" report off the ledger. Three smaller
-follow-ups worth doing alongside: (a) frontend views for the scanner and
-ledger (audit Etap 7 lists them; the dashboard still shows neither, though
-A6's sharp-CLV + CI columns on the backtests page are now in); (b) extend
-`_ODDS_API_OVERRIDES` in `data/normalize.py` from the first real
-"unmatched" reports once the season starts; (c) rerun the M5 absence A/B
-now that A1 is fixed — the published null is currently unsupported either
-way, and it is gating a spend decision.
+**Phase 3 risk layer is built (ADR 0015)** — thresholds fixed in advance,
+chosen for sample integrity and fault detection rather than capital
+preservation (at 2-5 PLN on a 500 PLN roll, ruin is not the live risk):
+
+- `betting/risk.py` — `RiskLimits` (band 2-5 PLN; per fixture 5; per day 25
+  = 5%; 15 open; drawdown stop 75 = 15%), `check_exposure` reporting **every**
+  breached limit, `drawdown_state` over **realized** P&L in **settlement**
+  order. Boundaries inclusive. `RiskLimits.for_bankroll` scales the
+  aggregate caps but not the stake band (flat staking is a program choice).
+- **The per-fixture cap equals the single-stake cap on purpose**: one bet
+  per match, because the weekly block bootstrap cannot see dependence inside
+  a fixture and two correlated bets would narrow the CLV interval falsely.
+- `ledger.exposure_state` / `realized_drawdown` feed `log_pick`, which
+  raises `RiskRefusal` and writes **nothing**. `--override-risk` places the
+  bet and stamps `picks.risk_override` / `risk_note` (migration
+  `d4b8e2f6a9c1`) — the weekly report reads those back.
+- `services/risk_report.py` + `pitchprob risk status|report`: money over 7
+  days, CLV over the whole ledger, **no CI below 4 ISO weeks** (a bootstrap
+  over one block is a straight line), tax-free allowance, overrides,
+  drawdown vs the stop.
+
+**Next task — three open items, in rough priority order:** (a) rerun the M5
+absence A/B now that A1 is fixed; the published null is unsupported in
+either direction and it gates a spend decision; (b) frontend views for the
+scanner, ledger and the risk report (audit Etap 7 — the dashboard shows
+none of them); (c) extend `_ODDS_API_OVERRIDES` in `data/normalize.py` from
+the first real "unmatched" reports once the season starts.
 
 **User context:** Polish operator — PL-licensed books only, communicates in
 Polish (docs/code stay English). See the memory directory for details.

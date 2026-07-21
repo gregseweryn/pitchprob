@@ -81,6 +81,24 @@ def test_adr_0014_states_the_corners_budget_and_the_feed_bar() -> None:
     assert "UNVERIFIED" in text
 
 
+def test_adr_0015_thresholds_match_the_code() -> None:
+    """The risk limits are only "fixed in advance" if the document and the
+    code cannot drift apart. This test is the hinge between them."""
+    from decimal import Decimal
+
+    from pitchprob.betting.risk import DEFAULT_LIMITS
+
+    text = _read("docs/adr/0015-risk-layer-and-weekly-report.md")
+    assert DEFAULT_LIMITS.max_drawdown_pln == Decimal("75")
+    assert DEFAULT_LIMITS.max_daily_stake_pln == Decimal("25")
+    assert DEFAULT_LIMITS.max_match_stake_pln == DEFAULT_LIMITS.max_stake_pln
+    for claim in ("2-5 PLN", "25 PLN", "75 PLN", "15 "):
+        assert claim in text, f"ADR 0015 no longer states {claim!r}"
+    # the reasoning that picked these numbers, not just the numbers
+    assert "one bet per fixture" in text
+    assert "Ruin is not a live risk" in text
+
+
 def test_readme_test_counter_is_honest_and_current() -> None:
     """Audit finding A9(c): the test counter drifted 343→395 unnoticed.
     The README may never overstate the suite, and staleness is capped so
