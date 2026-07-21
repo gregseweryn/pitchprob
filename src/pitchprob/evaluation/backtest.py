@@ -14,7 +14,11 @@ from typing import Any, Protocol, cast
 import pandas as pd
 
 from pitchprob.markets import match_odds
-from pitchprob.models.base import OutcomeProbabilities, validate_matches
+from pitchprob.models.base import (
+    OutcomeProbabilities,
+    absences_from_row,
+    validate_matches,
+)
 
 
 class _Fittable(Protocol):
@@ -46,10 +50,16 @@ def outcome_index(ft_home: int, ft_away: int) -> int:
 def default_predict(model: Any, row: Any) -> OutcomeProbabilities:
     """Route to the strongest interface the model offers: date-aware 1X2
     (feature/ensemble models must know the prediction date), then the score
-    matrix (goal models), then undated 1X2 (outcome-space models)."""
+    matrix (goal models), then undated 1X2 (outcome-space models).
+
+    When the evaluation row carries absence passthrough columns (ADR 0008),
+    their values — including NaN, meaning "no coverage" — are forwarded to
+    the dated model, mirroring the training frame exactly (the M5/A1 fix:
+    without this the prediction row silently degraded to all-NaN absences
+    and the A/B ablation measured only the training-side effect)."""
     if hasattr(model, "match_probabilities_at"):
         dated: OutcomeProbabilities = model.match_probabilities_at(
-            row.home_team, row.away_team, row.date
+            row.home_team, row.away_team, row.date, **absences_from_row(row)
         )
         return dated
     if hasattr(model, "score_matrix"):

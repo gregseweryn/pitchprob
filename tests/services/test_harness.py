@@ -250,3 +250,19 @@ class TestCloseModeAndValidation:
     def test_unknown_ablation_raises(self, seeded_session: Session) -> None:
         with pytest.raises(ValueError):
             run_harness(seeded_session, _config(ablate="weather"))
+
+
+class TestCalibrationDefault:
+    """Audit finding A9: an `ensemble-cal` run without --calibration used to
+    default to isotonic — the method M4.5 measured as catastrophically
+    overfitting ~190-match calibration holdouts. Temperature is the
+    documented default and must stay the coded one."""
+
+    def test_harness_config_defaults_to_temperature(self) -> None:
+        assert HarnessConfig(start=date(2023, 9, 1)).calibration == "temperature"
+
+    def test_model_factory_defaults_to_temperature(self) -> None:
+        from pitchprob.services.harness import build_model_factory
+
+        model = build_model_factory("ensemble-cal", half_life=390.0)()
+        assert model.method == "temperature"

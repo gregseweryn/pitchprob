@@ -238,9 +238,20 @@ class FeatureBuilder:
         away_team: str,
         league: str,
         as_of: date,
+        absences_home: float | None = None,
+        absences_away: float | None = None,
     ) -> pd.DataFrame:
-        """Single prediction-time feature row for an upcoming fixture."""
+        """Single prediction-time feature row for an upcoming fixture.
+
+        The passthrough features cannot be derived from ``state`` — they are
+        pre-match facts the caller must supply. ``None`` lands as NaN, the
+        strict "no coverage" value the training frame uses."""
         features: dict[str, Any] = self._emit(state, home_team, away_team, as_of)
+        for column, value in (
+            ("absences_home", absences_home),
+            ("absences_away", absences_away),
+        ):
+            features[column] = float("nan") if value is None else float(value)
         features.update(
             {"date": as_of, "league": league, "home_team": home_team, "away_team": away_team}
         )

@@ -99,6 +99,7 @@ def xg(
 ) -> None:
     """Attach Understat xG to already-ingested matches (idempotent)."""
     from pitchprob.data.adapters.understat import REQUIRED_HEADERS
+    from pitchprob.data.understat_archive import SNAPSHOT_SUBDIR
     from pitchprob.data.xg_service import XgUpdateService
 
     configure_logging(get_settings().log_level)
@@ -107,7 +108,11 @@ def xg(
         cache_dir=get_settings().data_dir / "raw", headers=REQUIRED_HEADERS
     )
     with session_scope() as session:
-        service = XgUpdateService(session=session, downloader=downloader)
+        service = XgUpdateService(
+            session=session,
+            downloader=downloader,
+            snapshot_dir=get_settings().data_dir / SNAPSHOT_SUBDIR,
+        )
         for code in codes:
             for year in range(from_year, to_year + 1):
                 try:
@@ -273,7 +278,7 @@ def predict(
         typer.echo(f"  {entry['score']:<5} {_pct(entry['probability'])}")
 
     if "value_analysis" in book:
-        typer.echo("\nValue vs offered odds (quarter-Kelly):")
+        typer.echo("\nValue vs offered odds (Dixon-Coles + Shin market blend, quarter-Kelly):")
         for selection, v in book["value_analysis"].items():
             typer.echo(
                 f"  {selection:<5} price {v['offered_price']:.2f}  fair "
@@ -368,7 +373,8 @@ def backtest(
         bool, typer.Option("--pool", help="Train on all leagues, evaluate on --league")
     ] = False,
     selector: Annotated[
-        str, typer.Option(help="Bet selection: naive | blended (ADR 0006)")
+        str, typer.Option(help="Bet selection: naive | blended (ADR 0006) "
+                               "| meta (CLV gate, ADR 0011)")
     ] = "naive",
     blend_weight: Annotated[
         float, typer.Option(help="Model share in the log-linear blend")
@@ -377,8 +383,8 @@ def backtest(
         float, typer.Option(help="Hard price cap for blended selection")
     ] = 8.0,
     calibration: Annotated[
-        str, typer.Option(help="ensemble-cal method: isotonic | temperature")
-    ] = "isotonic",
+        str, typer.Option(help="ensemble-cal method: temperature (default) | isotonic")
+    ] = "temperature",
     end: Annotated[
         str | None, typer.Option(help="Last evaluation date, ISO (bounds A/B windows)")
     ] = None,
@@ -502,10 +508,12 @@ def experiment_run(
     ),
     ev_threshold: Annotated[float, typer.Option(help="Min EV to place a bet")] = 0.03,
     pool: Annotated[bool, typer.Option("--pool", help="Pooled training")] = False,
-    selector: Annotated[str, typer.Option(help="naive | blended")] = "naive",
+    selector: Annotated[str, typer.Option(help="naive | blended | meta")] = "naive",
     blend_weight: Annotated[float, typer.Option(help="Model share in blend")] = 0.4,
     max_price: Annotated[float, typer.Option(help="Hard price cap")] = 8.0,
-    calibration: Annotated[str, typer.Option(help="isotonic | temperature")] = "isotonic",
+    calibration: Annotated[
+        str, typer.Option(help="temperature (default) | isotonic")
+    ] = "temperature",
     end: Annotated[str | None, typer.Option(help="Last evaluation date, ISO")] = None,
     ablate: Annotated[str | None, typer.Option(help="Feature family to NaN")] = None,
     at: Annotated[str, typer.Option(help="close | open")] = "close",
@@ -551,10 +559,12 @@ def experiment_compare(
     ),
     ev_threshold: Annotated[float, typer.Option(help="Min EV to place a bet")] = 0.03,
     pool: Annotated[bool, typer.Option("--pool", help="Pooled training")] = False,
-    selector: Annotated[str, typer.Option(help="naive | blended")] = "naive",
+    selector: Annotated[str, typer.Option(help="naive | blended | meta")] = "naive",
     blend_weight: Annotated[float, typer.Option(help="Model share in blend")] = 0.4,
     max_price: Annotated[float, typer.Option(help="Hard price cap")] = 8.0,
-    calibration: Annotated[str, typer.Option(help="isotonic | temperature")] = "isotonic",
+    calibration: Annotated[
+        str, typer.Option(help="temperature (default) | isotonic")
+    ] = "temperature",
     end: Annotated[str | None, typer.Option(help="Last evaluation date, ISO")] = None,
     ablate: Annotated[str | None, typer.Option(help="Feature family to NaN")] = None,
     at: Annotated[str, typer.Option(help="close | open")] = "close",
@@ -602,7 +612,7 @@ def record_odds(
     """
     from pathlib import Path
 
-    from pitchprob.data.adapters.odds_api import SPORT_KEYS
+    from pitchprob.data.adapters.odds_api import SPORT_KEYS, scrub_http_error
 
     configure_logging(get_settings().log_level)
     settings = get_settings()
@@ -624,6 +634,11 @@ def record_odds(
                 summary = record_snapshot(
                     session, client, leagues=leagues, markets=market_list
                 )
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        # `from None`: the cause chain carries the request URL with the
+        # apiKey — it must not survive into any traceback.
+        raise typer.Exit(code=1) from None
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(

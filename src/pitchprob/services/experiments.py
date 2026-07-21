@@ -140,11 +140,20 @@ def _weekly_bet_aggregates(bets: pd.DataFrame | None) -> pd.DataFrame | None:
     frame["week"] = week_block_labels(list(frame["date"]))
     frame["clv_present"] = frame["clv"].notna().astype(float)
     frame["clv_filled"] = frame["clv"].fillna(0.0)
+    sharp = (
+        frame["clv_sharp"]
+        if "clv_sharp" in frame.columns
+        else pd.Series(np.nan, index=frame.index)
+    )
+    frame["clv_sharp_present"] = sharp.notna().astype(float)
+    frame["clv_sharp_filled"] = sharp.fillna(0.0)
     grouped = frame.groupby("week").agg(
         pnl=("pnl", "sum"),
         stake=("stake", "sum"),
         clv_sum=("clv_filled", "sum"),
         clv_n=("clv_present", "sum"),
+        clv_sharp_sum=("clv_sharp_filled", "sum"),
+        clv_sharp_n=("clv_sharp_present", "sum"),
     )
     return grouped
 
@@ -231,6 +240,16 @@ def compare_experiments(
                     n_boot=n_boot,
                 )
                 metrics["delta_clv"] = _summary_dict(delta_clv)
+            # ADR 0011's lesson operationalized: a delta on the exec label
+            # alone produced the meta-gate false positive, so the sharp
+            # (timing-only) delta rides alongside wherever both arms have it.
+            if a["clv_sharp_n"].sum() > 0 and b["clv_sharp_n"].sum() > 0:
+                delta_clv_sharp = block_bootstrap_ratio_delta(
+                    a["clv_sharp_sum"].to_numpy(), a["clv_sharp_n"].to_numpy(),
+                    b["clv_sharp_sum"].to_numpy(), b["clv_sharp_n"].to_numpy(),
+                    n_boot=n_boot,
+                )
+                metrics["delta_clv_sharp"] = _summary_dict(delta_clv_sharp)
 
     report = _render_report(metrics)
     if store:
@@ -301,12 +320,17 @@ def _render_report(metrics: dict[str, Any]) -> str:
     b_staking = cast(dict[str, Any], metrics["b"].get("staking_flat", {}))
     row("ROI", a_staking.get("roi"), b_staking.get("roi"),
         metrics.get("delta_roi"), lower_is_better=False)
-    row("mean CLV", a_staking.get("mean_clv"), b_staking.get("mean_clv"),
+    row("mean CLV (exec)", a_staking.get("mean_clv"), b_staking.get("mean_clv"),
         metrics.get("delta_clv"), lower_is_better=False)
+    row("mean CLV (sharp)", a_staking.get("mean_clv_sharp"),
+        b_staking.get("mean_clv_sharp"),
+        metrics.get("delta_clv_sharp"), lower_is_better=False)
     lines += [
         "",
         "Lower is better for log-loss/RPS; higher for ROI/CLV. A verdict of "
         f"null means the delta did not clear the {int((1 - _ALPHA) * 100)}% "
-        "interval — report it as a null result, not a trend.",
+        "interval — report it as a null result, not a trend. Sharp CLV is "
+        "the timing-only primary endpoint (ADR 0011): an exec-CLV win "
+        "without a sharp-CLV win is line shopping, not edge.",
     ]
     return "\n".join(lines)

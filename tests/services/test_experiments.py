@@ -118,3 +118,20 @@ class TestCompareExperiments:
         assert "| metric |" in result.report
         assert "log-loss" in result.report
         assert "ROI" in result.report
+
+    def test_sharp_clv_delta_reported(self, seeded_session) -> None:  # noqa: F811
+        """Audit A5 / ADR 0011: the comparison must delta the timing-only
+        sharp label alongside exec CLV — the meta-gate false positive came
+        from reading an exec-only delta as edge."""
+        result = compare_experiments(
+            seeded_session, _config(), _config(model="elo"), n_boot=200
+        )
+        assert "delta_clv_sharp" in result.metrics
+        assert "mean CLV (sharp)" in result.report
+        assert "mean CLV (exec)" in result.report
+
+    def test_sharp_clv_delta_nulls_on_identical_configs(self, seeded_session) -> None:  # noqa: F811
+        result = compare_experiments(seeded_session, _config(), _config(), n_boot=200)
+        assert result.metrics["delta_clv_sharp"]["point"] == pytest.approx(
+            0.0, abs=1e-12
+        )

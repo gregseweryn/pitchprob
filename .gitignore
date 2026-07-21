@@ -18,10 +18,15 @@ htmlcov/
 # Project data & outputs (raw CSVs, reports, model artifacts) — root-level only,
 # NOT src/pitchprob/data or tests/data. The odds tape (data/tape/*.csv.gz)
 # IS tracked: the GitHub Actions recorder commits daily snapshots (ADR 0012).
+# So are the raw Understat snapshots (data/understat/*.json.gz): after the
+# FBref/Opta cutoff Understat is the only free xG source — audit 2026-07.
 /data/*
 !/data/tape/
 /data/tape/*
 !/data/tape/*.csv.gz
+!/data/understat/
+/data/understat/*
+!/data/understat/*.json.gz
 /reports/
 /artifacts/
 

@@ -134,7 +134,8 @@ class GbmModel:
         return self._fitted.n_trees
 
     def match_probabilities_at(
-        self, home_team: str, away_team: str, as_of: date
+        self, home_team: str, away_team: str, as_of: date,
+        *, absences_home: float | None = None, absences_away: float | None = None,
     ) -> OutcomeProbabilities:
         if self._fitted is None:
             raise ModelNotFittedError("call fit() before predicting")
@@ -146,6 +147,8 @@ class GbmModel:
             away_team=away_team,
             league=league,
             as_of=as_of,
+            absences_home=absences_home,
+            absences_away=absences_away,
         )
         probs = fitted.booster.predict_proba(self._model_matrix(row))[0]
         return OutcomeProbabilities(

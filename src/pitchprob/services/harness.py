@@ -91,7 +91,9 @@ class HarnessConfig:
     selector: str = "naive"
     blend_weight: float = 0.4
     max_price: float = 8.0
-    calibration: str = "isotonic"
+    # temperature is the default for a measured reason: isotonic overfits
+    # ~190-match calibration holdouts catastrophically (M4.5 verdict).
+    calibration: str = "temperature"
     end: date | None = None
     ablate: str | None = None
     at: str = "close"
@@ -110,7 +112,7 @@ class HarnessResult:
 
 
 def build_model_factory(
-    name: str, half_life: float, calibration: str = "isotonic"
+    name: str, half_life: float, calibration: str = "temperature"
 ) -> Callable[[], Any]:
     from pitchprob.models.dixon_coles import DixonColesModel, IndependentPoissonModel
     from pitchprob.models.elo import EloModel

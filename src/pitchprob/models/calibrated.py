@@ -37,7 +37,11 @@ import pandas as pd
 
 from pitchprob.core.errors import ModelNotFittedError
 from pitchprob.evaluation.calibration import IsotonicCalibrator, TemperatureScaling
-from pitchprob.models.base import OutcomeProbabilities, validate_matches
+from pitchprob.models.base import (
+    OutcomeProbabilities,
+    absences_from_row,
+    validate_matches,
+)
 from pitchprob.models.dixon_coles import DEFAULT_HALF_LIFE_DAYS
 from pitchprob.models.ensemble import EnsembleModel
 
@@ -101,8 +105,11 @@ class CalibratedEnsembleModel:
         outcomes = np.empty(len(calib_window), dtype=np.int64)
         for i, raw_row in enumerate(calib_window.itertuples(index=False)):
             row = cast(Any, raw_row)
+            # train/serve parity (M5/A1): calibrators fit on predictions made
+            # with the same absence passthrough the evaluation rows carry.
             p: OutcomeProbabilities = stage_base.match_probabilities_at(
-                str(row.home_team), str(row.away_team), row.date
+                str(row.home_team), str(row.away_team), row.date,
+                **absences_from_row(row),
             )
             probs[i] = (p.home, p.draw, p.away)
             hg, ag = int(row.ft_home), int(row.ft_away)
@@ -138,10 +145,16 @@ class CalibratedEnsembleModel:
         )
 
     def match_probabilities_at(
-        self, home_team: str, away_team: str, as_of: date
+        self, home_team: str, away_team: str, as_of: date,
+        *, absences_home: float | None = None, absences_away: float | None = None,
     ) -> OutcomeProbabilities:
+        kwargs: dict[str, float] = {}
+        if absences_home is not None:
+            kwargs["absences_home"] = absences_home
+        if absences_away is not None:
+            kwargs["absences_away"] = absences_away
         return self._calibrate(
-            self.base_.match_probabilities_at(home_team, away_team, as_of)
+            self.base_.match_probabilities_at(home_team, away_team, as_of, **kwargs)
         )
 
     def match_probabilities(self, home_team: str, away_team: str) -> OutcomeProbabilities:

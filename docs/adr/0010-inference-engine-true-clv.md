@@ -10,15 +10,15 @@ operations) found three structural gaps, all fixable with data already in the
 database:
 
 1. **~1M stored odds quotes were never used as evaluation input.** The `odds`
-   table holds opening *and* closing prices for four books across 1X2, OU 2.5
-   and Asian handicap, but the backtest consumed only the Pinnacle close
-   (benchmark + blend anchor) and market-max close (settlement price).
+   table holds early-snapshot *and* closing prices for four books across 1X2,
+   OU 2.5 and Asian handicap, but the backtest consumed only the Pinnacle
+   close (benchmark + blend anchor) and market-max close (settlement price).
 2. **The reported "CLV" had no timing dimension.** Both its legs — settlement
    price and fair probability — came from the closing snapshot, so it
    measured cross-book price dispersion at the close (line-shopping value),
    not "did the market move toward our price after we bet". The Pinnacle
-   closing line covers 20,733 of 21,589 matches and the opening line 20,717:
-   a real bet-at-open → measure-at-close loop was computable all along.
+   closing line covers 20,733 of 21,589 matches and the early-snapshot line
+   20,717: a real bet-early → measure-at-close loop was computable all along.
 3. **The research loop could not certify anything.** No significance testing
    existed (the bootstrap CIs promised in ADR 0004 were never implemented),
    the ablation flag supported exactly one hardcoded family, and published
@@ -29,14 +29,15 @@ database:
 
 1. **Two simulation clocks.** `--at close` preserves the legacy kickoff
    protocol bit-for-bit (regression-pinned against the published numbers).
-   `--at open` is the syndicate clock: the selector sees only the opening
+   `--at open` is the syndicate clock: the selector sees only the early
    snapshot (prices and Shin-de-margined Pinnacle anchor), settlement happens
-   at opening prices, and **true CLV = opening price taken × Shin(closing
-   fair) − 1**. A new `benchmark_open_subset` block reports the model against
-   the opening line — the actually beatable target.
+   at early-snapshot prices, and **true CLV = early-snapshot price taken ×
+   Shin(closing fair) − 1**. A new `benchmark_open_subset` block reports the
+   model against the early-snapshot line — the earliest beatable target this
+   dataset carries.
 2. **Multi-market candidates from one score matrix.** In open mode,
-   score-matrix models price OU 2.5 and AH at the quoted opening line inside
-   the walk-forward loop (an `extra_predict` hook on the backtester — same
+   score-matrix models price OU 2.5 and AH at the quoted early-snapshot line
+   inside the walk-forward loop (an `extra_predict` hook on the backtester — same
    fitted model, no second fit, no lookahead). Realized settlement lives in
    `betting/settlement.py` (gross return per unit stake; quarter-line
    split-stake), property-tested to agree cell-for-cell with the
@@ -44,8 +45,8 @@ database:
    *effective* win fractions (`EV = p·price − 1` with pushes/half-wins
    folded in), which is also what a de-margined two-way book quotes, so the
    ADR 0006 log-linear blend stays coherent across markets. AH CLV exists
-   only where the closing line matches the opening line (a moved line prices
-   a different bet); coverage is reported.
+   only where the closing line matches the early-snapshot line (a moved line
+   prices a different bet); coverage is reported.
 3. **Block-bootstrap inference** (`evaluation/significance.py`). Matches and
    bets within an ISO week share teams, conditions and bankroll, so the week
    is the exchangeable unit: ROI and CLV confidence intervals resample whole
@@ -77,9 +78,30 @@ corpus of 21,589 matches):
   ROI −0.68910256410256365%, CLV +1.2505271936048817%.
 
 First honest measurement of the new benchmark: on the same subset (n=1,730)
-the Pinnacle **opening** line scores LL 0.95018 vs the close's 0.94640 — the
-open is a weaker target, but only ~0.4pp weaker. Nothing here promises
-crossing either line; the point is to measure the right gap.
+the Pinnacle **early-snapshot** line scores LL 0.95018 vs the close's
+0.94640 — the early snapshot is a weaker target, but only ~0.4pp weaker.
+Nothing here promises crossing either line; the point is to measure the
+right gap.
+
+## Terminology correction (2026-07-20): "open" means "early snapshot"
+
+What this ADR originally called the "opening line" is not the market open.
+football-data.co.uk's non-closing columns (PSH, B365H, …) are collected on
+Friday afternoons for weekend fixtures and Tuesday afternoons for midweek
+ones (per the source's notes.txt) — a late pre-match snapshot, roughly T-3
+to T-1 before kickoff and long after books first price a match. Everywhere
+this document, the CLI (`--at open`) and the stored metric keys
+(`benchmark_open_subset`) say "open", read **early snapshot**: the earliest
+price this dataset carries, not the true opening price. The prose above has
+been renamed accordingly; the flag and metric-key names keep "open" for
+compatibility with stored runs.
+
+The negative true-CLV verdicts survive this correction, conservatively: the
+measured window (early snapshot → close) is *shorter* than a true
+open → close window, so "the closing line moves against these bets" was
+measured over less of the market's movement, not more. What the correction
+forbids is any claim about the true market open — this dataset simply does
+not contain it.
 
 ## Rejected alternatives
 

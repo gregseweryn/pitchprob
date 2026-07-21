@@ -165,3 +165,37 @@ class TestSnapshotPrediction:
             training_row,
             check_names=False,
         )
+
+    def test_features_for_matches_training_row_with_passthrough(self) -> None:
+        """Parity must cover the passthrough family too: a caller supplying
+        the pre-match absence counts must get the same row the training frame
+        carries — not an unconditional NaN (the M5/A1 defect: every
+        prediction row silently dropped the absences)."""
+        frame = micro_league()
+        frame["absences_home"] = [0.0, 1.0, 2.0, 3.0]
+        frame["absences_away"] = [1.0, 0.0, 0.0, 2.0]
+        X_all, _ = FeatureBuilder().build_training_frame(frame)
+
+        state = FeatureBuilder().snapshot(frame.iloc[:3])
+        predicted = FeatureBuilder().features_for(
+            state, home_team="C", away_team="A",
+            league="X", as_of=date(2024, 1, 22),
+            absences_home=3.0, absences_away=2.0,
+        )
+        training_row = X_all.iloc[3][FEATURE_COLUMNS].astype(float)
+        pd.testing.assert_series_equal(
+            predicted.iloc[0][FEATURE_COLUMNS].astype(float),
+            training_row,
+            check_names=False,
+        )
+
+    def test_features_for_defaults_passthrough_to_nan(self) -> None:
+        """Unsupplied absences land as NaN — the strict "no coverage"
+        semantics, never a fabricated healthy squad."""
+        state = FeatureBuilder().snapshot(micro_league().iloc[:3])
+        predicted = FeatureBuilder().features_for(
+            state, home_team="C", away_team="A",
+            league="X", as_of=date(2024, 1, 22),
+        )
+        assert np.isnan(predicted.iloc[0]["absences_home"])
+        assert np.isnan(predicted.iloc[0]["absences_away"])

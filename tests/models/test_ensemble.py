@@ -91,6 +91,53 @@ class TestWeightFitting:
             ensemble.fit(league.iloc[:310])
 
 
+class Recording:
+    """Fake component that records the absences it is asked to predict with."""
+
+    def __init__(self, seen: list[tuple[float | None, float | None]]) -> None:
+        self.seen = seen
+
+    def fit(self, matches: pd.DataFrame) -> "Recording":
+        return self
+
+    def match_probabilities_at(
+        self, home: str, away: str, as_of: date,
+        *, absences_home: float | None = None, absences_away: float | None = None,
+    ) -> OutcomeProbabilities:
+        self.seen.append((absences_home, absences_away))
+        return OutcomeProbabilities(home=0.4, draw=0.3, away=0.3)
+
+
+class TestAbsencePassthrough:
+    """The M5/A1 channel through the stack: absence counts must reach the
+    components both during stack fitting (from the holdout rows) and at
+    prediction time (from the caller)."""
+
+    def test_absences_flow_into_components(self, league: pd.DataFrame) -> None:
+        seen: list[tuple[float | None, float | None]] = []
+        frame = league.copy()
+        frame["absences_home"] = 2.0
+        frame["absences_away"] = 1.0
+        ensemble = EnsembleModel(
+            component_factories={"rec": lambda: Recording(seen)}, holdout=300
+        )
+        ensemble.fit(frame)
+        # stack fitting predicted the holdout with the rows' absence counts
+        assert seen
+        assert all(pair == (2.0, 1.0) for pair in seen)
+
+        seen.clear()
+        ensemble.match_probabilities_at(
+            "A", "B", date(2025, 1, 1), absences_home=3.0, absences_away=0.0
+        )
+        assert seen[-1] == (3.0, 0.0)
+
+        # unsupplied stays unsupplied — legacy three-argument components
+        # remain valid as long as no absence data is fed
+        ensemble.match_probabilities_at("A", "B", date(2025, 1, 1))
+        assert seen[-1] == (None, None)
+
+
 class TestRealComponents:
     def test_bounded_dilution_with_correlated_components(
         self, league: pd.DataFrame

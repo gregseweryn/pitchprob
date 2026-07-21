@@ -84,6 +84,38 @@ class TestBiasCorrection:
         assert fitted.base_.n_fit_rows == 900
 
 
+class TestAbsencePassthrough:
+    def test_absences_forward_to_the_base(self) -> None:
+        """The wrapper must not sever the M5/A1 channel: absence counts flow
+        to the base both in the calibration-holdout loop and at prediction."""
+        seen: list[tuple[float | None, float | None]] = []
+
+        class RecordingBase(BiasedBase):
+            def match_probabilities_at(
+                self, home: str, away: str, as_of: date,
+                *, absences_home: float | None = None,
+                absences_away: float | None = None,
+            ) -> OutcomeProbabilities:
+                seen.append((absences_home, absences_away))
+                return BIASED_OUTPUT
+
+        frame = synthetic_frame()
+        frame["absences_home"] = 1.0
+        frame["absences_away"] = 0.0
+        model = CalibratedEnsembleModel(
+            base_factory=RecordingBase, calib_holdout=400, method="isotonic"
+        )
+        model.fit(frame)
+        assert seen
+        assert all(pair == (1.0, 0.0) for pair in seen)
+
+        seen.clear()
+        model.match_probabilities_at(
+            "T0", "T3", date(2025, 1, 1), absences_home=2.0, absences_away=1.0
+        )
+        assert seen == [(2.0, 1.0)]
+
+
 class TestValidation:
     def test_too_few_matches_raises(self) -> None:
         model = CalibratedEnsembleModel(base_factory=BiasedBase, calib_holdout=400)

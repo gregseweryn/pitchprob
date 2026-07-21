@@ -46,6 +46,55 @@ class TestProbabilities:
             GbmModel().match_probabilities("A", "B")
 
 
+class TestAbsencePassthrough:
+    """The M5/A1 channel: absence counts supplied at prediction time must
+    reach the booster. Trained on a league where absences are the only
+    signal, the prediction must respond to the supplied counts — with a dead
+    channel (unconditional NaN) both calls would be identical."""
+
+    @staticmethod
+    def _absence_driven_league(n_days: int = 400, seed: int = 3) -> pd.DataFrame:
+        from datetime import date, timedelta
+
+        rng = np.random.default_rng(seed)
+        teams = ["A", "B", "C", "D", "E", "F"]
+        rows = []
+        for i in range(n_days):
+            home, away = rng.choice(teams, size=2, replace=False)
+            ah, aa = int(rng.integers(0, 5)), int(rng.integers(0, 5))
+            lam_home = float(np.exp(0.25 - 0.45 * ah + 0.45 * aa))
+            lam_away = float(np.exp(0.05 + 0.45 * ah - 0.45 * aa))
+            rows.append(
+                {
+                    "date": date(2023, 1, 1) + timedelta(days=i),
+                    "home_team": home,
+                    "away_team": away,
+                    "ft_home": int(rng.poisson(lam_home)),
+                    "ft_away": int(rng.poisson(lam_away)),
+                    "league": "X",
+                    "absences_home": float(ah),
+                    "absences_away": float(aa),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def test_prediction_responds_to_supplied_absences(self) -> None:
+        from datetime import date
+
+        frame = self._absence_driven_league()
+        model = GbmModel(n_estimators=200, seed=11)
+        model.fit(frame)
+
+        as_of = date(2024, 2, 15)
+        depleted_home = model.match_probabilities_at(
+            "A", "B", as_of, absences_home=4.0, absences_away=0.0
+        )
+        depleted_away = model.match_probabilities_at(
+            "A", "B", as_of, absences_home=0.0, absences_away=4.0
+        )
+        assert depleted_away.home > depleted_home.home + 0.10
+
+
 class TestSkill:
     def test_beats_uniform_out_of_sample(self, data: pd.DataFrame, fitted: GbmModel) -> None:
         holdout = data.iloc[int(len(data) * 0.8):]

@@ -183,6 +183,39 @@ def test_record_odds_offline(cli_env, monkeypatch) -> None:
     assert "490" in result.output
 
 
+def test_record_odds_http_error_never_prints_the_key(cli_env, monkeypatch) -> None:
+    """Audit finding A4: a 401/429 from The Odds API used to escape as a
+    traceback whose URL carried the apiKey. The CLI must exit 1 with a
+    scrubbed message instead."""
+    import httpx
+
+    class FailingOddsClient:
+        def fetch_odds(self, sport_key: str, *, markets: list[str]):
+            request = httpx.Request(
+                "GET", "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
+                params={"apiKey": "SECRET-KEY-123"},
+            )
+            response = httpx.Response(
+                429, headers={"x-requests-remaining": "0"}, request=request
+            )
+            response.raise_for_status()
+            raise AssertionError("unreachable")
+
+    monkeypatch.setenv("PITCHPROB_ODDS_API_KEY", "SECRET-KEY-123")
+    get_settings.cache_clear()
+    monkeypatch.setattr(cli_main, "_make_odds_client", lambda key: FailingOddsClient())
+    result = runner.invoke(cli_main.app, ["record-odds", "--league", "E0"])
+    assert result.exit_code == 1
+    assert "SECRET-KEY-123" not in result.output
+    assert "429" in result.output
+    assert "0" in result.output  # quota header still surfaced
+    if result.exception is not None:  # no rendered traceback may carry the key
+        import traceback
+
+        rendered = "".join(traceback.format_exception(result.exception))
+        assert "SECRET-KEY-123" not in rendered
+
+
 def test_record_odds_requires_key(cli_env, monkeypatch) -> None:
     # empty beats delenv: the developer's real .env may carry a key and
     # pydantic-settings would fall back to it

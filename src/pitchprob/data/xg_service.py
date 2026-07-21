@@ -11,6 +11,7 @@ unmatched fixtures are reported, never silently dropped.
 import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from pitchprob.data.adapters.understat import (
 from pitchprob.data.normalize import normalized_tokens, understat_canonical
 from pitchprob.data.orm import League, Match, Season, Team, TeamAlias
 from pitchprob.data.service import Downloader
+from pitchprob.data.understat_archive import snapshot_payload
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +74,16 @@ class XgUpdateReport:
 
 
 class XgUpdateService:
-    def __init__(self, *, session: Session, downloader: Downloader) -> None:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        downloader: Downloader,
+        snapshot_dir: Path | None = None,
+    ) -> None:
         self.session = session
         self.downloader = downloader
+        self.snapshot_dir = snapshot_dir
 
     def _match_index(self, league_code: str, start_year: int) -> dict[tuple[int, int, date], Match]:
         rows = self.session.execute(
@@ -87,9 +96,12 @@ class XgUpdateService:
 
     def update_league_season(self, league_code: str, start_year: int) -> XgUpdateReport:
         report = XgUpdateReport(league_code=league_code, start_year=start_year)
-        records = parse_league_payload(
-            self.downloader.get(league_url(league_code, start_year))
-        )
+        content = self.downloader.get(league_url(league_code, start_year))
+        if self.snapshot_dir is not None:
+            # Archive before parsing: a payload the parser no longer
+            # understands is exactly the one worth keeping as evidence.
+            snapshot_payload(self.snapshot_dir, league_code, start_year, content)
+        records = parse_league_payload(content)
         report.parsed = len(records)
         index = self._match_index(league_code, start_year)
 

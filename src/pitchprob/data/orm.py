@@ -22,6 +22,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     UniqueConstraint,
@@ -130,6 +131,9 @@ class OddsQuote(Base):
     __tablename__ = "odds"
     __table_args__ = (
         UniqueConstraint("match_id", "bookmaker", "market", "selection", "line", "is_closing"),
+        # The harness's snapshot loader filters on exactly this triple up to
+        # ~8x per run; without the index Postgres full-scans ~1M rows.
+        Index("ix_odds_bookmaker_market_is_closing", "bookmaker", "market", "is_closing"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

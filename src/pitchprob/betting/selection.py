@@ -23,6 +23,10 @@ from pitchprob.betting.staking import kelly_fraction
 
 FloatArray = npt.NDArray[np.float64]
 
+#: Model share in the log-linear pool (ADR 0006); shared by the backtest
+#: harness and the prediction service's value analysis.
+DEFAULT_BLEND_WEIGHT = 0.4
+
 _OUTPUT_COLUMNS = ("p_bet", "expected_value", "kelly_fraction")
 
 
@@ -46,7 +50,8 @@ def blend_probabilities(
     return cast(FloatArray, pooled / pooled.sum())
 
 
-def _blend_binary(p_model: float, p_market: float, weight: float) -> float:
+def blend_binary(p_model: float, p_market: float, *, weight: float) -> float:
+    """Per-selection blend: the selection vs its complement (two outcomes)."""
     pooled = blend_probabilities(
         np.array([p_model, 1.0 - p_model]),
         np.array([p_market, 1.0 - p_market]),
@@ -58,7 +63,7 @@ def _blend_binary(p_model: float, p_market: float, weight: float) -> float:
 def select_value_bets(
     candidates: pd.DataFrame,
     *,
-    blend_weight: float = 0.4,
+    blend_weight: float = DEFAULT_BLEND_WEIGHT,
     ev_threshold: float = 0.03,
     max_price: float = 8.0,
     kelly_scale: float = 0.25,
@@ -82,7 +87,7 @@ def select_value_bets(
         p_bet = (
             p_model
             if math.isnan(p_market)
-            else _blend_binary(p_model, p_market, blend_weight)
+            else blend_binary(p_model, p_market, weight=blend_weight)
         )
         expected_value = p_bet * price - 1.0
         if expected_value <= ev_threshold:

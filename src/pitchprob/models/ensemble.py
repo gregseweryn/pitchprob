@@ -26,7 +26,7 @@ from scipy.optimize import minimize
 
 from pitchprob.core.errors import ModelNotFittedError
 from pitchprob.markets import match_odds
-from pitchprob.models.base import OutcomeProbabilities, validate_matches
+from pitchprob.models.base import OutcomeProbabilities, absences_from_row, validate_matches
 from pitchprob.models.dixon_coles import DEFAULT_HALF_LIFE_DAYS, DixonColesModel
 from pitchprob.models.elo import EloModel
 from pitchprob.models.gbm import GbmModel
@@ -37,10 +37,23 @@ _EPS = 1e-12
 _DEFAULT_PREDICT_GAP_DAYS = 7
 
 
-def component_probabilities(model: Any, home: str, away: str, as_of: date) -> FloatArray:
-    """Uniform 1X2 access across goal-space and outcome-space models."""
+def component_probabilities(
+    model: Any, home: str, away: str, as_of: date,
+    *, absences_home: float | None = None, absences_away: float | None = None,
+) -> FloatArray:
+    """Uniform 1X2 access across goal-space and outcome-space models.
+
+    Absence passthrough (ADR 0008) is forwarded only when supplied, so
+    components with the plain three-argument signature stay valid as long as
+    no absence data flows; a dated component fed absence data must accept
+    the keywords — failing loudly beats silently dropping the feature."""
     if hasattr(model, "match_probabilities_at"):
-        p = model.match_probabilities_at(home, away, as_of)
+        kwargs: dict[str, float] = {}
+        if absences_home is not None:
+            kwargs["absences_home"] = absences_home
+        if absences_away is not None:
+            kwargs["absences_away"] = absences_away
+        p = model.match_probabilities_at(home, away, as_of, **kwargs)
     elif hasattr(model, "score_matrix"):
         mo = match_odds(model.score_matrix(home, away))
         p = OutcomeProbabilities(home=mo.home, draw=mo.draw, away=mo.away)
@@ -114,9 +127,14 @@ class EnsembleModel:
         outcomes = np.empty(len(holdout), dtype=np.int64)
         for j, raw_row in enumerate(holdout.itertuples(index=False)):
             row = cast(Any, raw_row)
+            # train/serve parity: the holdout rows carry the pre-match
+            # absence counts, so the stacking inputs must be predicted with
+            # them, exactly as the walk-forward evaluation rows are.
+            absences = absences_from_row(row)
             for i, name in enumerate(names):
                 probs = component_probabilities(
-                    stage_one[name], str(row.home_team), str(row.away_team), row.date
+                    stage_one[name], str(row.home_team), str(row.away_team), row.date,
+                    **absences,
                 )
                 log_probs[i, j] = np.log(np.clip(probs, _EPS, None))
             hg, ag = int(row.ft_home), int(row.ft_away)
@@ -176,14 +194,20 @@ class EnsembleModel:
         return self._components
 
     def match_probabilities_at(
-        self, home_team: str, away_team: str, as_of: date
+        self, home_team: str, away_team: str, as_of: date,
+        *, absences_home: float | None = None, absences_away: float | None = None,
     ) -> OutcomeProbabilities:
         if self._components is None or self._stack is None:
             raise ModelNotFittedError("call fit() before predicting")
         log_p = np.stack(
             [
-                np.log(np.clip(component_probabilities(model, home_team, away_team, as_of),
-                               _EPS, None))
+                np.log(np.clip(
+                    component_probabilities(
+                        model, home_team, away_team, as_of,
+                        absences_home=absences_home, absences_away=absences_away,
+                    ),
+                    _EPS, None,
+                ))
                 for model in self._components.values()
             ]
         )

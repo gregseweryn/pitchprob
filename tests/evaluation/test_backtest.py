@@ -242,3 +242,91 @@ class TestDateAwarePredictHook:
 
         p = default_predict(Dated(), Row())
         assert p.home == 0.5
+
+    def test_default_predict_forwards_absences_from_the_row(self) -> None:
+        """The M5/A1 fix: when the evaluation row carries the absence
+        passthrough columns, the dated model must receive their values —
+        including NaN, which means "no coverage" and must reach the model."""
+        from pitchprob.evaluation.backtest import default_predict
+        from pitchprob.models.base import OutcomeProbabilities as OP
+
+        seen: dict[str, float] = {}
+
+        class Dated:
+            def match_probabilities_at(
+                self, home: str, away: str, as_of: date,
+                *, absences_home: float | None = None,
+                absences_away: float | None = None,
+            ) -> OP:
+                assert absences_home is not None and absences_away is not None
+                seen["home"] = absences_home
+                seen["away"] = absences_away
+                return OP(0.5, 0.3, 0.2)
+
+        class Row:
+            home_team, away_team = "A", "B"
+            date = date(2023, 9, 1)
+            absences_home, absences_away = 2.0, 0.0
+
+        default_predict(Dated(), Row())
+        assert seen == {"home": 2.0, "away": 0.0}
+
+
+class TestAbsencePassthrough:
+    """End-to-end: run_backtest evaluation rows carry absence counts and the
+    dated model must see exactly the row's values (train/serve parity)."""
+
+    def test_run_backtest_forwards_row_absences_to_the_model(self) -> None:
+        from pitchprob.models.base import OutcomeProbabilities as OP
+
+        received: dict[date, tuple[float, float]] = {}
+
+        class Dated:
+            def fit(self, df: pd.DataFrame) -> "Dated":
+                return self
+
+            def match_probabilities_at(
+                self, home: str, away: str, as_of: date,
+                *, absences_home: float | None = None,
+                absences_away: float | None = None,
+            ) -> OP:
+                assert absences_home is not None and absences_away is not None
+                received[as_of] = (absences_home, absences_away)
+                return OP(1 / 3, 1 / 3, 1 / 3)
+
+        frame = league_frame()
+        frame["absences_home"] = [float(i) for i in range(len(frame))]
+        frame["absences_away"] = float("nan")
+        result = run_backtest(
+            frame,
+            model_factory=Dated,
+            start=date(2023, 9, 1),
+            refit_every_days=7,
+            min_train_matches=5,
+        )
+        assert len(result) > 0
+        # one match per day: the day index is the planted absences_home value
+        for when, (home_count, away_count) in received.items():
+            assert home_count == float((when - date(2023, 8, 1)).days)
+            assert away_count != away_count  # NaN passes through untouched
+
+    def test_frames_without_absence_columns_need_no_kwargs(self) -> None:
+        """Models with the plain three-argument signature keep working as
+        long as the frame has no passthrough columns."""
+        from pitchprob.models.base import OutcomeProbabilities as OP
+
+        class Plain:
+            def fit(self, df: pd.DataFrame) -> "Plain":
+                return self
+
+            def match_probabilities_at(self, home: str, away: str, as_of: date) -> OP:
+                return OP(1 / 3, 1 / 3, 1 / 3)
+
+        result = run_backtest(
+            league_frame(),
+            model_factory=Plain,
+            start=date(2023, 9, 1),
+            refit_every_days=7,
+            min_train_matches=5,
+        )
+        assert len(result) > 0

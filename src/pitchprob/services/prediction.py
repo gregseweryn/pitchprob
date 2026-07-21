@@ -12,8 +12,14 @@ cost is gone and a stale model can never serve after new data lands.
 
 Asian handicap entries report, per line, the probability that a bet on each
 side wins (fully or half) plus the push probability.
+
+Value analysis against offered odds runs on the **betting path**: Dixon-Coles
+probabilities blended with the Shin-de-margined offered prices (ADR 0006).
+The ensemble is display-only per the M3/M7 verdicts — its raw EV is the
+quantified longshot trap (-11.2% ROI in M2) and must never price a bet.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -23,6 +29,8 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from pitchprob.betting.odds_math import remove_overround_shin
+from pitchprob.betting.selection import DEFAULT_BLEND_WEIGHT, blend_binary
 from pitchprob.betting.staking import expected_value, kelly_fraction
 from pitchprob.core.errors import UnknownTeamError
 from pitchprob.data.dataset import load_matches_frame
@@ -165,6 +173,43 @@ def _counts_section(
     }
 
 
+def value_analysis_1x2(
+    model_probabilities: Mapping[str, float],
+    offered_prices: tuple[float, float, float],
+    *,
+    blend_weight: float = DEFAULT_BLEND_WEIGHT,
+    kelly_scale: float = 0.25,
+) -> dict[str, dict[str, float]]:
+    """Per-selection EV at the offered 1X2 prices, on the betting path.
+
+    The offered prices are Shin de-margined into a market distribution; each
+    selection's model probability is pooled with its market counterpart
+    (binary blend, selection vs complement, ADR 0006) and EV plus fractional
+    Kelly come from the pooled ``p_bet``. ``fair_price`` is the break-even
+    price ``1 / p_bet``. ``model_probabilities`` must be the betting model's
+    (Dixon-Coles) — never raw ensemble EV, the trap quantified at -11.2% ROI.
+    """
+    shin = remove_overround_shin(offered_prices)
+    analysis: dict[str, dict[str, float]] = {}
+    for selection, price, p_market in zip(
+        ("home", "draw", "away"), offered_prices, shin, strict=True
+    ):
+        p_model = float(model_probabilities[selection])
+        p_bet = blend_binary(p_model, p_market, weight=blend_weight)
+        analysis[selection] = {
+            "offered_price": price,
+            "model_probability": p_model,
+            "market_probability": p_market,
+            "p_bet": p_bet,
+            "fair_price": 1.0 / p_bet,
+            "expected_value": expected_value(probability=p_bet, price=price),
+            "kelly_fraction": kelly_fraction(
+                probability=p_bet, price=price, fraction=kelly_scale
+            ),
+        }
+    return analysis
+
+
 def build_market_book(
     session: Session,
     league_code: str,
@@ -271,21 +316,8 @@ def build_market_book(
     book["counts_markets"] = counts_markets
 
     if offered_1x2 is not None:
-        probabilities = one_x_two["ensemble"]
-        prices = dict(zip(("home", "draw", "away"), offered_1x2, strict=True))
-        book["value_analysis"] = {
-            selection: {
-                "offered_price": price,
-                "model_probability": probabilities[selection],
-                "fair_price": 1.0 / probabilities[selection],
-                "expected_value": expected_value(
-                    probability=probabilities[selection], price=price
-                ),
-                "kelly_fraction": kelly_fraction(
-                    probability=probabilities[selection], price=price, fraction=0.25
-                ),
-            }
-            for selection, price in prices.items()
-        }
+        book["value_analysis"] = value_analysis_1x2(
+            one_x_two["dixon_coles"], offered_1x2
+        )
 
     return book
