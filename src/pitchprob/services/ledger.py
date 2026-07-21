@@ -65,6 +65,22 @@ from pitchprob.services.tape import (
 
 _CENTS = Decimal("0.01")
 
+#: Payload contract (ADR 0004): the ledger's numbers cannot be rendered
+#: anywhere without the sentences that make them readable.
+LEDGER_CAVEATS: tuple[str, ...] = (
+    "CLV is the decision variable, not ROI. Over a few dozen small bets ROI "
+    "is almost entirely variance; closing-line value is the part that "
+    "carries signal.",
+    "Read clv_sharp before clv_exec. Sharp CLV is timing alone — the "
+    "Pinnacle price at bet time against the closing fair. Their difference "
+    "is what the venue and the promotion contributed, which under the Phase "
+    "0-2a verdicts is the only place value has been shown to live.",
+    "The tape's \"close\" is the last daily snapshot before kickoff and can "
+    "sit hours early; every pick carries that timestamp.",
+    "Stakes are 2-5 PLN against a notional 500 PLN bankroll. This is a "
+    "measurement season: the output is evidence about CLV, not income.",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SettlementSummary:

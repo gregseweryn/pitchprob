@@ -6,6 +6,8 @@
  * browser it falls back to the build-time NEXT_PUBLIC_API_URL or the
  * published localhost port. */
 
+import type { Interval } from "@/lib/format";
+
 const API_URL =
   (typeof window === "undefined" ? process.env.API_URL : undefined) ??
   process.env.NEXT_PUBLIC_API_URL ??
@@ -80,6 +82,140 @@ export type BacktestRow = {
   metrics: Record<string, unknown>;
 };
 
+/** Prices and stakes cross the wire as strings: the backend keeps money in
+ * Decimal and will not round it into a float on the way out. */
+export type Money = string;
+
+export type TapeEvent = {
+  event_id: string;
+  home_team: string;
+  away_team: string;
+  commence_time: string;
+};
+
+export type Verdict = "PLAY" | "NO BET" | "STALE" | "NO ANCHOR" | "UNVERIFIED";
+
+export type QuoteInput = {
+  bookmaker: string;
+  price: Money;
+  tax_free?: boolean;
+  boosted_price?: Money | null;
+  payout_haircut?: number;
+  source?: "operator" | "feed";
+};
+
+export type ScanVerdict = {
+  bookmaker: string;
+  price_quoted: Money;
+  price_effective: Money;
+  tax_free: boolean;
+  boosted: boolean;
+  promo_value: number | null;
+  edge: number | null;
+  edge_model: number | null;
+  verdict: Verdict;
+  source: "operator" | "feed";
+};
+
+export type ScanResponse = {
+  event_id: string;
+  home_team: string;
+  away_team: string;
+  commence_time: string;
+  market: string;
+  selection: string;
+  line: Money | null;
+  anchor: {
+    bookmaker: string;
+    price: Money;
+    fair_probability: number;
+    observed_at: string;
+    age_hours: number;
+    line: Money | null;
+  } | null;
+  model_probability: number | null;
+  verdicts: ScanVerdict[];
+  caveats: string[];
+};
+
+export type Pick = {
+  id: number;
+  kickoff_utc: string;
+  home_team: string;
+  away_team: string;
+  market: string;
+  selection: string;
+  line: Money | null;
+  bookmaker: string;
+  stake_pln: Money;
+  price_quoted: Money;
+  price_effective: Money;
+  tax_free: boolean;
+  price_sharp: Money | null;
+  gross_return_pln: Money | null;
+  settled_at: string | null;
+  closing_observed_at: string | null;
+  clv_exec: number | null;
+  clv_sharp: number | null;
+  clv_shopping: number | null;
+  risk_override: boolean;
+  risk_note: string | null;
+};
+
+export type WeeklyMetrics = {
+  generated_at: string;
+  window_days: number;
+  window: {
+    n_picks: number;
+    n_settled: number;
+    staked_pln: number;
+    profit_pln: number;
+  };
+  clv: {
+    n: number;
+    n_blocks: number;
+    mean_exec: number | null;
+    mean_sharp: number | null;
+    mean_shopping: number | null;
+    exec_ci: Interval | null;
+    sharp_ci: Interval | null;
+    shopping_ci: Interval | null;
+  };
+  tax_free: Record<string, { used_pln: number; remaining_pln: number }>;
+  overrides: Array<{
+    pick_id: number;
+    placed_at: string;
+    fixture: string;
+    stake_pln: number;
+    risk_note: string | null;
+  }>;
+  drawdown: {
+    equity_pln: number;
+    peak_equity_pln: number;
+    drawdown_pln: number;
+    limit_pln: number;
+    breaker_tripped: boolean;
+  };
+};
+
+export type LedgerResponse = {
+  picks: Pick[];
+  summary: {
+    n_picks: number;
+    n_settled: number;
+    total_staked_pln: number;
+    total_returned_pln: number;
+    profit_pln: number;
+    roi: number | null;
+    n_with_clv: number;
+    mean_clv_exec: number | null;
+    mean_clv_sharp: number | null;
+    mean_shopping_value: number | null;
+  };
+  weekly: WeeklyMetrics;
+  caveats: string[];
+};
+
 async function handle<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
@@ -133,4 +269,33 @@ export async function postCoupons(request: {
       body: JSON.stringify(request),
     }),
   );
+}
+
+export async function getTapeEvents(query = ""): Promise<TapeEvent[]> {
+  const search = query ? `?query=${encodeURIComponent(query)}` : "";
+  return handle(
+    await fetch(`${API_URL}/v1/scanner/events${search}`, { cache: "no-store" }),
+  );
+}
+
+export async function postScan(request: {
+  market: string;
+  selection: string;
+  quotes: QuoteInput[];
+  line?: Money | null;
+  event_id?: string | null;
+  model_probability?: number | null;
+  min_edge?: number;
+}): Promise<ScanResponse> {
+  return handle(
+    await fetch(`${API_URL}/v1/scanner/scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+  );
+}
+
+export async function getLedger(): Promise<LedgerResponse> {
+  return handle(await fetch(`${API_URL}/v1/ledger`, { cache: "no-store" }));
 }

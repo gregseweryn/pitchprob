@@ -71,7 +71,7 @@ uv run pitchprob predict --league E0 --home "Manchester City" --away "Chelsea" \
     --odds 1.55,4.4,5.9
 uv run pitchprob backtest --league E0 --start 2021-08-01
 make serve                      # FastAPI on :8000, OpenAPI docs at /docs
-make check                      # ruff + mypy --strict + 618 tests
+make check                      # ruff + mypy --strict + 634 tests
 ```
 
 Example output (real run, July 2026):
@@ -495,6 +495,23 @@ missing-or-stale. Until then `pitchprob scan --feed` returns **UNVERIFIED**
 where it would otherwise say PLAY — the edge is still computed, because the
 lead is real; the authorisation is not.
 
+#### Dashboard: scanner and ledger views
+
+The audit's Etap 7 asked for the two surfaces the dashboard was missing.
+`/scanner` verdicts the prices you can see at Polish books against the
+tape's Pinnacle fair — effective prices, the anchor's age printed beside
+every verdict, and NO ANCHOR / STALE / UNVERIFIED as named refusals rather
+than blank cells. `/ledger` shows every real-money pick with its CLV
+decomposition, the weekly report and the risk layer's state.
+
+Verdict states use shape, not only colour: filled = actionable, outlined =
+conditional, dashed = the instrument could not answer. Caveats arrive in
+the API payload (`ScanResponse.caveats`, `LedgerResponse.caveats`) and are
+rendered as content next to the numbers — the same contract the coupon
+builder has always had. Absence and zero are kept distinct everywhere: a
+pick without CLV shows a dash, because printing 0.0% would assert the
+market did not move, which nobody observed.
+
 #### The risk layer: what the ledger refuses (ADR 0015)
 
 Phase 3, on the agreed parameters — flat 2-5 PLN stakes, 500 PLN notional
@@ -595,7 +612,7 @@ records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing
 
-618 tests: hand-computed reference values for every formula, hypothesis property tests
+634 tests: hand-computed reference values for every formula, hypothesis property tests
 (market partitions sum to 1, quarter-line AH EV ≡ mean of adjacent half lines, Shin
 books renormalize, realized settlement ≡ the probability-side markets module
 cell-for-cell, block-bootstrap scale equivariance), analytic-vs-numeric gradient

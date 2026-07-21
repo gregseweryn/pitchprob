@@ -68,14 +68,20 @@ export function DataTable({
 
 export function Field({
   label,
+  repeat = false,
   children,
 }: {
   label: string;
+  /** This field repeats a labelled row above it. Once the row grid kicks in
+   * (sm+) the repeated label is noise and the column header carries the
+   * meaning — but while the fields are stacked on mobile every one of them
+   * needs its own label, so it is hidden by breakpoint, never dropped. */
+  repeat?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <label className="flex flex-col gap-1 text-xs font-medium text-ink-muted">
-      {label}
+      <span className={cx(repeat && "sm:sr-only")}>{label}</span>
       {children}
     </label>
   );
@@ -123,6 +129,93 @@ export function ErrorBanner({ message }: { message: string }) {
     >
       {message}
     </div>
+  );
+}
+
+/** Payload disclaimers rendered as content (PRODUCT.md): the caveats arrive
+ * in the same JSON as the numbers, so they sit next to them — never in a
+ * footer, never behind a tooltip. */
+export function Caveats({
+  items,
+  title = "Read these with the numbers",
+}: {
+  items: string[];
+  title?: string;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <section className="rounded-md border border-line bg-surface px-4 py-3">
+      <h3 className="text-sm font-medium">{title}</h3>
+      <ul className="mt-2 flex flex-col gap-1.5">
+        {items.map((item, i) => (
+          <li
+            key={i}
+            className="max-w-[70ch] text-xs leading-relaxed text-ink-muted"
+          >
+            {item}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Scanner verdict states. Shape carries the meaning so the vocabulary
+ * survives greyscale and colour-blindness: a *filled* badge is actionable,
+ * an *outlined* one would be actionable but is conditional, and a *dashed*
+ * one means the instrument could not answer at all. */
+const VERDICT_STYLES: Record<string, string> = {
+  PLAY: "border-gold-ink bg-gold-soft text-gold-ink font-medium",
+  UNVERIFIED: "border-gold-ink text-gold-ink",
+  "NO BET": "border-line bg-surface text-ink-muted",
+  STALE: "border-dashed border-ink-muted text-ink-muted",
+  "NO ANCHOR": "border-dashed border-ink-muted text-ink-muted",
+};
+
+const VERDICT_HINTS: Record<string, string> = {
+  PLAY: "Edge clears the gate against a fresh sharp anchor.",
+  UNVERIFIED:
+    "Would be a play, but the price came from the unvalidated feed — check the book's own screen first.",
+  "NO BET": "Priced and rejected: the edge does not clear the gate.",
+  STALE: "The sharp anchor is too old to bet against. Refresh the tape.",
+  "NO ANCHOR": "The tape does not quote this line, so there is nothing to compare.",
+};
+
+export function VerdictBadge({ verdict }: { verdict: string }) {
+  return (
+    <span
+      title={VERDICT_HINTS[verdict]}
+      className={cx(
+        "inline-block whitespace-nowrap rounded border px-1.5 py-0.5 text-xs",
+        VERDICT_STYLES[verdict] ?? "border-line text-ink-muted",
+      )}
+    >
+      {verdict}
+    </span>
+  );
+}
+
+/** A labelled figure in a dense row — deliberately not the big-number stat
+ * card: this surface is read like a form, not a marketing page. */
+export function StatList({
+  items,
+}: {
+  items: Array<{ label: string; value: React.ReactNode; hint?: string }>;
+}) {
+  return (
+    <dl className="flex flex-wrap gap-x-8 gap-y-3">
+      {items.map((item) => (
+        <div key={item.label} className="min-w-[9rem]">
+          <dt className="text-xs text-ink-muted">{item.label}</dt>
+          <dd className="num mt-0.5 text-base">{item.value}</dd>
+          {item.hint ? (
+            <p className="mt-0.5 max-w-[28ch] text-xs leading-snug text-ink-muted">
+              {item.hint}
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </dl>
   );
 }
 

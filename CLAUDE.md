@@ -18,7 +18,7 @@ OU/AH multi-market betting, block-bootstrap CIs, `pitchprob experiment
 run|compare` registry with paired significance). Data: 21,589 matches (top-5
 European leagues 2014/15–2025/26, football-data.co.uk; Pinnacle close covers
 20,733 and open 20,717 of them), 99.98% Understat xG coverage, 40,500
-API-Football injury records (seasons 2022–24). ~620 tests, mypy --strict,
+API-Football injury records (seasons 2022–24). ~650 tests, mypy --strict,
 15 ADRs in `docs/adr/` (read them before changing anything they cover).
 
 The syndicate-transformation roadmap (approved 2026-07-18, plan file
@@ -209,12 +209,28 @@ preservation (at 2-5 PLN on a 500 PLN roll, ruin is not the live risk):
   over one block is a straight line), tax-free allowance, overrides,
   drawdown vs the stop.
 
-**Next task — three open items, in rough priority order:** (a) rerun the M5
-absence A/B now that A1 is fixed; the published null is unsupported in
-either direction and it gates a spend decision; (b) frontend views for the
-scanner, ledger and the risk report (audit Etap 7 — the dashboard shows
-none of them); (c) extend `_ODDS_API_OVERRIDES` in `data/normalize.py` from
-the first real "unmatched" reports once the season starts.
+**Dashboard now covers the forward program (audit Etap 7 closed).** New
+API surface: `GET /v1/scanner/events`, `POST /v1/scanner/scan`,
+`GET /v1/ledger` — each returns a `caveats` list, because ADR 0004 makes
+disclaimers payload, not prose the client is trusted to add
+(`SCANNER_CAVEATS` / `LEDGER_CAVEATS` live in the services). Pages:
+`/scanner` (effective prices per book, anchor age, NO ANCHOR/STALE/
+UNVERIFIED as named refusals) and `/ledger` (CLV exec/sharp + shopping,
+weekly report, tax-free allowance, drawdown, overrides). Verdict states use
+shape as well as colour: filled = actionable, outlined = conditional,
+dashed = the instrument could not answer. **Frontend is Next.js 16**, not
+15 — Turbopack by default, and React 19's purity rule rejects `Date.now()`
+during render (the ledger uses the report's own `generated_at` instead).
+
+**Two bugs found by driving the real UI, both fixed:** the header `<nav>`
+overflowed the viewport horizontally on **every** page at 390px (pre-
+existing; five nav items made it certain — it now wraps), and repeated
+quote rows lost their labels when the grid stacked on mobile.
+
+**Next task — two open items:** (a) rerun the M5 absence A/B now that A1 is
+fixed; the published null is unsupported in either direction and it gates a
+spend decision; (b) extend `_ODDS_API_OVERRIDES` in `data/normalize.py`
+from the first real "unmatched" reports once the season starts.
 
 **User context:** Polish operator — PL-licensed books only, communicates in
 Polish (docs/code stay English). See the memory directory for details.

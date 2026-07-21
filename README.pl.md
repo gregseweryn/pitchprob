@@ -59,8 +59,13 @@ Pełna dokumentacja techniczna z tabelami wyników: [README.md](README.md)
   a `--override-risk` stawia go mimo to i **trwale znakuje picka** powodem.
   `pitchprob risk status|report` pokazuje stan limitów i cotygodniowy raport
   „co mówi taśma".
-- **Interfejsy**: dashboard Next.js (wycena meczów, kupony, historia
-  backtestów) + API FastAPI + CLI Typer. `make stack-up` → :3000/:8000.
+- **Interfejsy**: dashboard Next.js (wycena meczów, **skaner**, **ledger**,
+  kupony, historia backtestów) + API FastAPI + CLI Typer. `make stack-up` →
+  :3000/:8000. Widok skanera pokazuje kursy efektywne per buk, wiek kotwicy
+  i werdykty NO ANCHOR/STALE/UNVERIFIED jako nazwane odmowy — nie puste
+  komórki; ledger pokazuje CLV exec/sharp z dekompozycją i stan warstwy
+  ryzyka. Disclaimery przychodzą w payloadzie API i są renderowane jako
+  treść obok liczb.
 
 ## Uczciwe werdykty (zmierzone, nie założone)
 

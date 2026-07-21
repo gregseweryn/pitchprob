@@ -14,6 +14,8 @@ export const metadata: Metadata = {
 
 const NAV = [
   { href: "/", label: "Price a fixture" },
+  { href: "/scanner", label: "Scanner" },
+  { href: "/ledger", label: "Ledger" },
   { href: "/coupons", label: "Coupons" },
   { href: "/backtests", label: "Backtests" },
 ];
@@ -30,12 +32,15 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <header className="border-b border-line">
-          <div className="mx-auto flex w-full max-w-6xl items-baseline gap-8 px-6 py-4">
+          {/* Wraps rather than overflowing: five nav items plus the wordmark
+            * exceed a 390px viewport, and a page that scrolls sideways to
+            * reach its own navigation is broken, not dense. */}
+          <div className="mx-auto flex w-full max-w-6xl flex-wrap items-baseline gap-x-8 gap-y-2 px-6 py-4">
             <Link href="/" className="text-lg font-semibold tracking-tight">
               pitchprob
               <span aria-hidden className="ml-1.5 inline-block h-2.5 w-2.5 rounded-full bg-gold" />
             </Link>
-            <nav className="flex gap-5 text-sm">
+            <nav className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
               {NAV.map((item) => (
                 <Link
                   key={item.href}

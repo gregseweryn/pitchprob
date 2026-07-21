@@ -38,6 +38,26 @@ from pitchprob.services.tape import (
     validate_market_selection,
 )
 
+#: Payload contract (ADR 0004, PRODUCT.md): the scanner's caveats travel
+#: *with* the verdicts, so no surface can render the numbers without them.
+#: The dashboard prints these as content, not as a footer.
+SCANNER_CAVEATS: tuple[str, ...] = (
+    "The anchor is the Shin-de-margined Pinnacle price from the odds tape — "
+    "a market price, not a model forecast. After the Phase 0-2a nulls the "
+    "model does not outpredict the market, so a model fair is shown as "
+    "information only and never changes a verdict.",
+    "Every comparison runs on effective prices: x0.88 under the 12% Polish "
+    "turnover tax, x1.0 under a tax-free promo. A taxed favourite below "
+    "~1.14 pays back less than the stake even when it wins.",
+    "The tape snapshots once a day, so the anchor can be hours old. Its age "
+    "is printed with every verdict; an anchor older than 30 hours downgrades "
+    "PLAY to STALE, because a stale sharp line is a prompt to refresh the "
+    "tape, not a basis for a bet.",
+    "Expect NO BET. The turnover tax is larger than any edge this project "
+    "has measured; value appears in promotions and in Polish prices that "
+    "have not yet followed a sharp move.",
+)
+
 Verdict = Literal["PLAY", "NO BET", "STALE", "NO ANCHOR", "UNVERIFIED"]
 
 #: Where a quote came from. ``feed`` is the odds-api.io PL feed (ADR 0014),

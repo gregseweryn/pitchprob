@@ -75,6 +75,15 @@ export default async function BacktestsPage() {
           </p>
         </Panel>
       ) : (
+        <div className="flex flex-col gap-3">
+        {rows.some((row) => !(row.metrics as Metrics).staking_flat?.clv_sharp_ci) ? (
+          <p className="max-w-[70ch] text-xs leading-relaxed text-ink-muted">
+            Blank sharp-CLV and CI cells are runs recorded before ADR 0011
+            added the two-label decomposition — the numbers were never
+            computed for them, so the columns are empty rather than zero.
+            Re-run those configurations to fill them in.
+          </p>
+        ) : null}
         <div className="overflow-x-auto rounded-md border border-line">
           <table className="w-full min-w-[1000px] text-sm">
             <thead>
@@ -155,6 +164,7 @@ export default async function BacktestsPage() {
               })}
             </tbody>
           </table>
+        </div>
         </div>
       )}
     </div>

@@ -1,6 +1,12 @@
-"""API request/response schemas."""
+"""API request/response schemas.
+
+Caveats are response *fields*, never prose the client is trusted to add:
+ADR 0004 makes disclaimers part of the payload, so a surface that renders
+the numbers cannot render them bare.
+"""
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -68,3 +74,109 @@ class CouponsResponse(BaseModel):
     band: tuple[float, float]
     caveat: str
     coupons: list[CouponOut]
+
+
+# --- The PL scanner (ADR 0013) -------------------------------------------
+
+
+class TapeEventOut(BaseModel):
+    """An upcoming fixture the odds tape can anchor."""
+
+    event_id: str
+    home_team: str
+    away_team: str
+    commence_time: datetime
+
+
+class QuoteIn(BaseModel):
+    """One price the operator sees at a Polish book, with its promo."""
+
+    bookmaker: str = Field(min_length=1, max_length=32)
+    price: Decimal = Field(gt=1)
+    tax_free: bool = False
+    boosted_price: Decimal | None = Field(default=None, gt=1)
+    payout_haircut: float = Field(default=1.0, gt=0.0, le=1.0)
+    source: Literal["operator", "feed"] = "operator"
+
+
+class ScanRequest(BaseModel):
+    market: Literal["1x2", "ou", "ah", "corners_ou", "corners_ah"]
+    selection: str = Field(min_length=1, max_length=16)
+    quotes: list[QuoteIn] = Field(min_length=1, max_length=12)
+    line: Decimal | None = None
+    event_id: str | None = None
+    query: str | None = None
+    model_probability: float | None = Field(default=None, gt=0.0, lt=1.0)
+    min_edge: float = Field(default=0.02, ge=0.0, le=1.0)
+
+
+class AnchorOut(BaseModel):
+    bookmaker: str
+    price: Decimal
+    fair_probability: float
+    observed_at: datetime
+    age_hours: float
+    line: Decimal | None
+
+
+class VerdictOut(BaseModel):
+    bookmaker: str
+    price_quoted: Decimal
+    price_effective: Decimal
+    tax_free: bool
+    boosted: bool
+    #: EV the promotion itself contributes over the bare taxed quote.
+    promo_value: float | None
+    edge: float | None
+    edge_model: float | None
+    verdict: Literal["PLAY", "NO BET", "STALE", "NO ANCHOR", "UNVERIFIED"]
+    source: Literal["operator", "feed"]
+
+
+class ScanResponse(BaseModel):
+    event_id: str
+    home_team: str
+    away_team: str
+    commence_time: datetime
+    market: str
+    selection: str
+    line: Decimal | None
+    anchor: AnchorOut | None
+    model_probability: float | None
+    verdicts: list[VerdictOut]
+    caveats: list[str]
+
+
+# --- The forward pick ledger (ADR 0013) + risk layer (ADR 0015) ----------
+
+
+class PickOut(BaseModel):
+    id: int
+    kickoff_utc: datetime
+    home_team: str
+    away_team: str
+    market: str
+    selection: str
+    line: Decimal | None
+    bookmaker: str
+    stake_pln: Decimal
+    price_quoted: Decimal
+    price_effective: Decimal
+    tax_free: bool
+    price_sharp: Decimal | None
+    gross_return_pln: Decimal | None
+    settled_at: datetime | None
+    closing_observed_at: datetime | None
+    clv_exec: float | None
+    clv_sharp: float | None
+    #: clv_exec - clv_sharp: the venue/promo component, paired per bet.
+    clv_shopping: float | None
+    risk_override: bool
+    risk_note: str | None
+
+
+class LedgerResponse(BaseModel):
+    picks: list[PickOut]
+    summary: dict[str, Any]
+    weekly: dict[str, Any]
+    caveats: list[str]
