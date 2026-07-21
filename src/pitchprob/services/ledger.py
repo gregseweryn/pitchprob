@@ -1,0 +1,335 @@
+"""The forward pick ledger (Phase 5 part 3): real bets, real CLV.
+
+One row per real-money bet the operator places at a Polish book. The ledger
+is the program's decision variable — CLV against the tape's Pinnacle close,
+never backtest ROI (syndicate plan, ADR 0010/0011) — so every pick carries
+the two-label decomposition per bet:
+
+- ``clv_sharp``  = price_sharp x Shin(close) - 1 — pure *timing*: did the
+  sharp line move for or against the bet after placement? ``price_sharp``
+  is the Pinnacle quote at bet time, auto-filled from the tape.
+- ``clv_exec``   = price_effective x Shin(close) - 1 — the PLN-real number:
+  executed price after the 12% turnover tax (x0.88) or a tax-free promo
+  (x1.0). ``clv_exec - clv_sharp`` is the venue/shopping component — under
+  the Phase 0-2a verdicts (no timing edge) it is the only place value can
+  live, which is exactly what the decomposition makes visible.
+
+Settlement mirrors the backtest contract (gross return per unit stake,
+``betting.settlement``) on the *effective* price; pushes return the full
+stake (Polish books refund the taxed stake on voids). Auto-settlement joins
+the tape's raw team naming to canonical ``matches`` rows at analysis time —
+unmatched picks are reported, never guessed (quarantine-not-drop).
+"""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, cast
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from pitchprob.betting.effective import (
+    BETCLIC_TAX_FREE_LIMIT,
+    TaxFreeAllowance,
+    effective_price,
+)
+from pitchprob.betting.settlement import (
+    AhSide,
+    MatchSelection,
+    TotalsSelection,
+    settle_1x2,
+    settle_asian_handicap,
+    settle_totals,
+)
+from pitchprob.data.normalize import canonical_team_name, odds_api_canonical
+from pitchprob.data.orm import Match, Pick, Team
+from pitchprob.services.tape import (
+    as_utc,
+    closing_fair,
+    fair_at,
+    validate_market_selection,
+)
+
+_CENTS = Decimal("0.01")
+
+
+@dataclass(frozen=True, slots=True)
+class SettlementSummary:
+    settled: int
+    pending: int
+    unmatched: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class ClvSummary:
+    attached: int
+    skipped_no_event: int
+    skipped_no_closing: int
+
+
+def _validate_bet(
+    market: str, selection: str, line: Decimal | None, stake: Decimal, quoted: Decimal
+) -> None:
+    validate_market_selection(market, selection, line)
+    if stake <= 0:
+        raise ValueError(f"stake must be positive, got {stake}")
+    if quoted <= 1:
+        raise ValueError(f"decimal price must exceed 1.0, got {quoted}")
+
+
+def tax_free_allowance(
+    session: Session,
+    bookmaker: str,
+    *,
+    limit: Decimal = BETCLIC_TAX_FREE_LIMIT,
+) -> TaxFreeAllowance:
+    """Tax-free turnover already consumed at ``bookmaker`` by logged picks."""
+    used = session.execute(
+        select(func.coalesce(func.sum(Pick.stake_pln), 0)).where(
+            Pick.bookmaker == bookmaker, Pick.tax_free.is_(True)
+        )
+    ).scalar_one()
+    return TaxFreeAllowance(limit=limit, used=Decimal(used))
+
+
+def log_pick(
+    session: Session,
+    *,
+    home_team: str,
+    away_team: str,
+    kickoff_utc: datetime,
+    market: str,
+    selection: str,
+    bookmaker: str,
+    stake_pln: Decimal,
+    price_quoted: Decimal,
+    line: Decimal | None = None,
+    tax_free: bool = False,
+    placed_at: datetime | None = None,
+    event_id: str | None = None,
+    notes: str | None = None,
+) -> Pick:
+    """Record one executed bet; auto-fill the sharp anchor from the tape.
+
+    A tax-free pick must fit the bookmaker's remaining tax-free allowance in
+    full (see ``TaxFreeAllowance``) — beyond it Betclic's promo demands a
+    >=50%-odds AKO, which a single cannot meet, so the ledger refuses rather
+    than silently mispricing the payout.
+    """
+    _validate_bet(market, selection, line, stake_pln, price_quoted)
+    if tax_free:
+        allowance = tax_free_allowance(session, bookmaker)
+        if not allowance.covers(stake_pln):
+            raise ValueError(
+                f"stake {stake_pln} PLN exceeds the remaining tax-free "
+                f"allowance {allowance.remaining} PLN at {bookmaker}; "
+                "log the pick as taxed instead"
+            )
+    when = placed_at if placed_at is not None else datetime.now(tz=UTC)
+    price_sharp: Decimal | None = None
+    sharp_observed_at: datetime | None = None
+    if event_id is not None:
+        anchor = fair_at(
+            session, event_id=event_id, market=market, line=line, at=when
+        )
+        if anchor is not None:
+            price_sharp = anchor.prices[selection]
+            sharp_observed_at = anchor.observed_at
+    pick = Pick(
+        created_at=datetime.now(tz=UTC),
+        event_id=event_id,
+        home_team=home_team,
+        away_team=away_team,
+        kickoff_utc=kickoff_utc,
+        market=market,
+        selection=selection,
+        line=line,
+        bookmaker=bookmaker,
+        stake_pln=stake_pln,
+        price_quoted=price_quoted,
+        tax_free=tax_free,
+        price_effective=effective_price(price_quoted, tax_free=tax_free),
+        placed_at=when,
+        price_sharp=price_sharp,
+        sharp_observed_at=sharp_observed_at,
+        notes=notes,
+    )
+    session.add(pick)
+    session.flush()
+    return pick
+
+
+def _unit_return(pick: Pick, ft_home: int, ft_away: int) -> float:
+    price = float(pick.price_effective)
+    if pick.market == "1x2":
+        return settle_1x2(
+            cast(MatchSelection, pick.selection), ft_home, ft_away, price
+        )
+    if pick.line is None:
+        # log_pick enforces this; a row that reaches settlement without a
+        # line came from elsewhere, and money must not be settled on a guess.
+        raise ValueError(
+            f"pick {pick.id} on market {pick.market!r} has no line"
+        )
+    if pick.market == "ou":
+        return settle_totals(
+            cast(TotalsSelection, pick.selection),
+            ft_home + ft_away,
+            pick.line,
+            price,
+        )
+    return settle_asian_handicap(
+        cast(AhSide, pick.selection), ft_home, ft_away, pick.line, price
+    )
+
+
+def settle_pick(
+    pick: Pick, *, ft_home: int, ft_away: int, settled_at: datetime
+) -> None:
+    """Fill realized settlement from a final score (gross, PLN, to the grosz)."""
+    unit = _unit_return(pick, ft_home, ft_away)
+    pick.ft_home = ft_home
+    pick.ft_away = ft_away
+    pick.gross_return_pln = (
+        pick.stake_pln * Decimal(str(unit))
+    ).quantize(_CENTS, rounding=ROUND_HALF_UP)
+    pick.settled_at = settled_at
+
+
+def _resolve_match(session: Session, pick: Pick) -> Match | None:
+    """Tape naming -> canonical teams -> the finished match row, if ingested."""
+    home = canonical_team_name(odds_api_canonical(pick.home_team))
+    away = canonical_team_name(odds_api_canonical(pick.away_team))
+    home_row = session.execute(
+        select(Team).where(Team.canonical_name == home)
+    ).scalar_one_or_none()
+    away_row = session.execute(
+        select(Team).where(Team.canonical_name == away)
+    ).scalar_one_or_none()
+    if home_row is None or away_row is None:
+        return None
+    kickoff_date = as_utc(pick.kickoff_utc).date()
+    for offset in (0, -1, 1):  # UTC kickoff vs local match_date can differ
+        match = (
+            session.execute(
+                select(Match).where(
+                    Match.home_team_id == home_row.id,
+                    Match.away_team_id == away_row.id,
+                    Match.match_date == kickoff_date + timedelta(days=offset),
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if match is not None:
+            return match
+    return None
+
+
+def auto_settle(session: Session, *, now: datetime) -> SettlementSummary:
+    """Settle every kicked-off, unsettled pick whose result is in ``matches``.
+
+    Picks that cannot be matched (result not ingested yet, or a tape team
+    name the canonical maps do not bridge) are listed, not guessed — the
+    operator settles them manually or extends the odds-api name map.
+    """
+    picks = session.execute(select(Pick).where(Pick.settled_at.is_(None))).scalars()
+    settled = 0
+    pending = 0
+    unmatched: list[str] = []
+    for pick in picks:
+        if as_utc(pick.kickoff_utc) >= now:
+            continue
+        match = _resolve_match(session, pick)
+        if match is None:
+            pending += 1
+            description = f"{pick.home_team} vs {pick.away_team}"
+            if description not in unmatched:
+                unmatched.append(description)
+            continue
+        settle_pick(
+            pick, ft_home=match.ft_home, ft_away=match.ft_away, settled_at=now
+        )
+        settled += 1
+    return SettlementSummary(settled=settled, pending=pending, unmatched=unmatched)
+
+
+def attach_clv(session: Session, *, now: datetime) -> ClvSummary:
+    """Fill closing-fair CLV (both labels) for kicked-off picks from the tape.
+
+    ``closing_observed_at`` records how stale the tape's "close" actually
+    was — the daily snapshot can sit hours before kickoff, and that honesty
+    timestamp travels with every CLV number downstream.
+    """
+    picks = session.execute(select(Pick).where(Pick.clv_exec.is_(None))).scalars()
+    attached = 0
+    skipped_no_event = 0
+    skipped_no_closing = 0
+    for pick in picks:
+        if as_utc(pick.kickoff_utc) >= now:
+            continue
+        if pick.event_id is None:
+            skipped_no_event += 1
+            continue
+        quote = closing_fair(
+            session, event_id=pick.event_id, market=pick.market, line=pick.line
+        )
+        if quote is None:
+            skipped_no_closing += 1
+            continue
+        fair = quote.probabilities[pick.selection]
+        pick.closing_fair_prob = fair
+        pick.closing_observed_at = quote.observed_at
+        pick.clv_exec = float(pick.price_effective) * fair - 1.0
+        if pick.price_sharp is not None:
+            pick.clv_sharp = float(pick.price_sharp) * fair - 1.0
+        attached += 1
+    return ClvSummary(
+        attached=attached,
+        skipped_no_event=skipped_no_event,
+        skipped_no_closing=skipped_no_closing,
+    )
+
+
+def ledger_summary(session: Session) -> dict[str, Any]:
+    """Ledger roll-up: settlement money and the CLV decomposition means.
+
+    ``profit_pln``/``roi`` cover settled picks only; CLV means cover picks
+    with the respective label attached. ``mean_shopping_value`` is the paired
+    mean of ``clv_exec - clv_sharp`` — the venue/promo component of CLV.
+    """
+    picks = list(session.execute(select(Pick)).scalars().all())
+    settled = [p for p in picks if p.settled_at is not None]
+    staked_settled = sum((p.stake_pln for p in settled), Decimal("0"))
+    returned = sum(
+        (p.gross_return_pln for p in settled if p.gross_return_pln is not None),
+        Decimal("0"),
+    )
+    execs = [p.clv_exec for p in picks if p.clv_exec is not None]
+    sharps = [p.clv_sharp for p in picks if p.clv_sharp is not None]
+    paired = [
+        p.clv_exec - p.clv_sharp
+        for p in picks
+        if p.clv_exec is not None and p.clv_sharp is not None
+    ]
+
+    def mean(values: list[float]) -> float | None:
+        return sum(values) / len(values) if values else None
+
+    return {
+        "n_picks": len(picks),
+        "n_settled": len(settled),
+        "total_staked_pln": float(sum((p.stake_pln for p in picks), Decimal("0"))),
+        "total_returned_pln": float(returned),
+        "profit_pln": float(returned - staked_settled),
+        "roi": (
+            float((returned - staked_settled) / staked_settled)
+            if staked_settled > 0
+            else None
+        ),
+        "n_with_clv": len(execs),
+        "mean_clv_exec": mean(execs),
+        "mean_clv_sharp": mean(sharps),
+        "mean_shopping_value": mean(paired),
+    }

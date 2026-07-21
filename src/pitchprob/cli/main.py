@@ -665,6 +665,450 @@ def import_tape_command(
     typer.echo(f"imported {files} new snapshot files ({ticks} ticks)")
 
 
+# --- Phase 5 part 3: the PL value scanner and the forward pick ledger -----
+
+
+def _parse_utc_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _parse_book_value(spec: str, option: str) -> tuple[str, str]:
+    book, sep, value = spec.partition(":")
+    if not sep or not book or not value:
+        raise typer.BadParameter(
+            f"--{option} expects book:price, got {spec!r}"
+        )
+    return book, value
+
+
+def _build_quotes(
+    quote_specs: list[str],
+    tax_free_books: list[str],
+    boost_specs: list[str],
+    haircut_specs: list[str],
+) -> list[Any]:
+    from decimal import Decimal, InvalidOperation
+
+    from pitchprob.betting.effective import PromoTerms
+    from pitchprob.services.scanner import OperatorQuote
+
+    try:
+        boosts = {
+            book: Decimal(value)
+            for book, value in (
+                _parse_book_value(s, "boost") for s in boost_specs
+            )
+        }
+        haircuts = {
+            book: float(value)
+            for book, value in (
+                _parse_book_value(s, "haircut") for s in haircut_specs
+            )
+        }
+        quotes = []
+        for spec in quote_specs:
+            book, value = _parse_book_value(spec, "quote")
+            tax_free = book in tax_free_books
+            boosted = boosts.get(book)
+            haircut = haircuts.get(book, 1.0)
+            promo = (
+                PromoTerms(
+                    tax_free=tax_free,
+                    boosted_price=boosted,
+                    payout_haircut=haircut,
+                )
+                if tax_free or boosted is not None or haircut != 1.0
+                else None
+            )
+            quotes.append(
+                OperatorQuote(bookmaker=book, price=Decimal(value), promo=promo)
+            )
+    except InvalidOperation as exc:
+        raise typer.BadParameter(f"bad decimal price: {exc}") from exc
+    return quotes
+
+
+def _signed_pct(value: float | None) -> str:
+    return "     —" if value is None else f"{100 * value:+6.1f}%"
+
+
+def _price_str(value: Any) -> str:
+    """Numeric(8,3) round-trips as '2.100'; operators read '2.10'."""
+    from decimal import Decimal
+
+    normalized = Decimal(value).normalize()
+    exponent = normalized.as_tuple().exponent
+    if isinstance(exponent, int) and exponent > -2:
+        normalized = normalized.quantize(Decimal("0.01"))
+    return f"{normalized:f}"
+
+
+def _age_hours(delta_seconds: float) -> str:
+    return f"{int(delta_seconds // 3600)}h ago"
+
+
+def _effective_display(verdict: Any) -> str:
+    from decimal import Decimal
+
+    from pitchprob.betting.effective import effective_price
+
+    promo = verdict.promo
+    base = (
+        verdict.price_quoted
+        if promo is None or promo.boosted_price is None
+        else promo.boosted_price
+    )
+    tax_free = promo is not None and promo.tax_free
+    return str(
+        effective_price(base, tax_free=tax_free).quantize(Decimal("0.01"))
+    )
+
+
+@app.command("scan")
+def scan_command(
+    match: Annotated[
+        str, typer.Argument(help="Team substring to find the fixture on the tape")
+    ],
+    selection: Annotated[
+        str, typer.Option(help="home/draw/away or over/under")
+    ],
+    market: Annotated[str, typer.Option(help="1x2, ou or ah")] = "1x2",
+    line: Annotated[
+        str | None, typer.Option(help="Goal/handicap line (ou/ah); must match "
+                                      "the tape's current Pinnacle line")
+    ] = None,
+    quote: Annotated[
+        list[str] | None,
+        typer.Option("--quote", help="Operator-seen PL price as book:price, "
+                                     "repeatable (e.g. betclic:2.10)"),
+    ] = None,
+    tax_free: Annotated[
+        list[str] | None,
+        typer.Option("--tax-free", help="Book whose quote is under a tax-free "
+                                        "promo (repeatable)"),
+    ] = None,
+    boost: Annotated[
+        list[str] | None,
+        typer.Option("--boost", help="Boosted price as book:price (repeatable)"),
+    ] = None,
+    haircut: Annotated[
+        list[str] | None,
+        typer.Option("--haircut", help="Payout haircut as book:factor for "
+                                       "conditioned winnings (repeatable)"),
+    ] = None,
+    model_prob: Annotated[
+        float | None,
+        typer.Option(help="Model fair probability for the selection "
+                          "(secondary anchor, informational)"),
+    ] = None,
+    min_edge: Annotated[
+        float, typer.Option(help="Minimum effective edge vs the sharp anchor "
+                                 "before PLAY")
+    ] = 0.02,
+) -> None:
+    """Verdict PL quotes against the live Pinnacle fair from the tape.
+
+    Primary anchor: Shin-de-margined Pinnacle from the odds tape (the sharp
+    anchor IS the edge thesis; the model does not outpredict the market —
+    Phase 0-2a verdicts). Expect mostly NO BET: the 12% tax sits in the
+    prices; value lives in promos/boosts and slow PL lines.
+    """
+    from decimal import Decimal
+
+    from pitchprob.services.scanner import scan as run_scan
+
+    configure_logging(get_settings().log_level)
+    if not quote:
+        raise typer.BadParameter("at least one --quote book:price is required")
+    quotes = _build_quotes(quote, tax_free or [], boost or [], haircut or [])
+    with session_scope() as session:
+        try:
+            result = run_scan(
+                session,
+                query=match,
+                market=market,
+                selection=selection,
+                line=Decimal(line) if line is not None else None,
+                quotes=quotes,
+                model_probability=model_prob,
+                min_edge=min_edge,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    line_label = f" {result.line}" if result.line is not None else ""
+    typer.echo(
+        f"{result.home_team} vs {result.away_team} — kickoff "
+        f"{result.commence_time:%Y-%m-%d %H:%M} UTC (event {result.event_id})"
+    )
+    if result.anchor is None or result.anchor_age is None:
+        typer.echo(
+            f"{market}{line_label} {selection}: no Pinnacle anchor on the "
+            "tape for this market/line — verdicts below carry no edge"
+        )
+    else:
+        anchor_price = result.anchor.prices[selection]
+        fair = result.anchor.probabilities[selection]
+        typer.echo(
+            f"{market}{line_label} {selection} | anchor: pinnacle "
+            f"{_price_str(anchor_price)} -> fair {100 * fair:.1f}% | observed "
+            f"{result.anchor.observed_at:%Y-%m-%d %H:%M} UTC "
+            f"({_age_hours(result.anchor_age.total_seconds())})"
+        )
+    for verdict in result.verdicts:
+        parts = [
+            f"{verdict.verdict:<9}",
+            f"{verdict.bookmaker:<10}",
+            f"quoted {_price_str(verdict.price_quoted)}",
+            f"eff {_effective_display(verdict)}",
+            f"edge {_signed_pct(verdict.edge)}",
+        ]
+        if verdict.edge_model is not None:
+            parts.append(f"model {_signed_pct(verdict.edge_model)}")
+        if verdict.evaluation is not None and verdict.promo is not None:
+            parts.append(
+                f"promo {100 * verdict.evaluation.promo_value:+.1f}pp"
+            )
+        typer.echo("  ".join(parts))
+
+
+pick_app = typer.Typer(
+    no_args_is_help=True,
+    help="Forward real-money pick ledger (Phase 5): log bets, settle, "
+         "track CLV vs the tape's Pinnacle close.",
+)
+app.add_typer(pick_app, name="pick")
+
+
+@pick_app.command("log")
+def pick_log(
+    market: Annotated[str, typer.Option(help="1x2, ou or ah")],
+    selection: Annotated[str, typer.Option(help="home/draw/away or over/under")],
+    book: Annotated[str, typer.Option(help="Polish bookmaker, e.g. betclic")],
+    stake: Annotated[str, typer.Option(help="Stake in PLN (program: 2-5)")],
+    price: Annotated[str, typer.Option(help="Executed decimal price as quoted")],
+    match: Annotated[
+        str | None,
+        typer.Option(help="Team substring to resolve the fixture from the "
+                          "tape (alternative: --home/--away/--kickoff)"),
+    ] = None,
+    home: Annotated[str | None, typer.Option(help="Home team (tape naming)")] = None,
+    away: Annotated[str | None, typer.Option(help="Away team (tape naming)")] = None,
+    kickoff: Annotated[
+        str | None, typer.Option(help="Kickoff, ISO (UTC assumed if naive)")
+    ] = None,
+    event: Annotated[
+        str | None, typer.Option(help="Tape event id (enables sharp anchor "
+                                      "and CLV when teams are given manually)")
+    ] = None,
+    line: Annotated[str | None, typer.Option(help="Line for ou/ah")] = None,
+    tax_free: Annotated[
+        bool, typer.Option("--tax-free", help="Executed under a tax-free promo "
+                                              "(Betclic 'Gra bez podatku')")
+    ] = False,
+    placed_at: Annotated[
+        str | None, typer.Option(help="Bet execution time, ISO (default: now)")
+    ] = None,
+    notes: Annotated[str | None, typer.Option(help="Free-form note")] = None,
+) -> None:
+    """Log one executed real-money bet; the sharp anchor fills from the tape."""
+    from decimal import Decimal
+
+    from pitchprob.services.ledger import log_pick, tax_free_allowance
+    from pitchprob.services.tape import find_events
+
+    configure_logging(get_settings().log_level)
+    now = datetime.now(tz=UTC)
+    event_id: str | None
+    with session_scope() as session:
+        if match is not None:
+            events = find_events(session, match, at=now)
+            if not events:
+                raise typer.BadParameter(
+                    f"no upcoming tape event matches {match!r}"
+                )
+            if len(events) > 1:
+                names = "; ".join(
+                    f"{e.home_team} vs {e.away_team} ({e.event_id})"
+                    for e in events
+                )
+                raise typer.BadParameter(f"{match!r} is ambiguous: {names}")
+            found = events[0]
+            home_name, away_name = found.home_team, found.away_team
+            kickoff_dt = found.commence_time
+            event_id = event if event is not None else found.event_id
+        else:
+            if home is None or away is None or kickoff is None:
+                raise typer.BadParameter(
+                    "give --match, or all of --home/--away/--kickoff"
+                )
+            home_name, away_name = home, away
+            kickoff_dt = _parse_utc_datetime(kickoff)
+            event_id = event
+        try:
+            pick = log_pick(
+                session,
+                home_team=home_name,
+                away_team=away_name,
+                kickoff_utc=kickoff_dt,
+                market=market,
+                selection=selection,
+                line=Decimal(line) if line is not None else None,
+                bookmaker=book,
+                stake_pln=Decimal(stake),
+                price_quoted=Decimal(price),
+                tax_free=tax_free,
+                placed_at=(
+                    _parse_utc_datetime(placed_at) if placed_at else None
+                ),
+                event_id=event_id,
+                notes=notes,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        line_label = (
+            f" {_price_str(pick.line)}" if pick.line is not None else ""
+        )
+        typer.echo(
+            f"logged pick #{pick.id}: {home_name} vs {away_name} | "
+            f"{market}{line_label} {selection} @ {book} "
+            f"{_price_str(pick.price_quoted)} "
+            f"(effective {_price_str(pick.price_effective)})"
+        )
+        if pick.price_sharp is not None and pick.sharp_observed_at is not None:
+            age = now - pick.sharp_observed_at.replace(tzinfo=UTC)
+            typer.echo(
+                f"sharp anchor: pinnacle {_price_str(pick.price_sharp)} (observed "
+                f"{pick.sharp_observed_at:%Y-%m-%d %H:%M} UTC, "
+                f"{_age_hours(age.total_seconds())})"
+            )
+        else:
+            typer.echo(
+                "no sharp anchor on the tape (CLV will need the event id)"
+            )
+        if not Decimal("2") <= pick.stake_pln <= Decimal("5"):
+            typer.echo(
+                f"warning: stake {pick.stake_pln} PLN is outside the 2-5 PLN "
+                "program range (Phase 3 parameters)"
+            )
+        if tax_free:
+            allowance = tax_free_allowance(session, book)
+            typer.echo(
+                f"tax-free allowance remaining: {allowance.remaining} PLN "
+                f"at {book}"
+            )
+
+
+@pick_app.command("settle")
+def pick_settle(
+    pick_id: Annotated[
+        int | None, typer.Option("--id", help="Settle one pick manually")
+    ] = None,
+    score: Annotated[
+        str | None, typer.Option("--result", help="Final score as H:A "
+                                                  "(with --id)")
+    ] = None,
+) -> None:
+    """Settle picks and attach CLV vs the tape's Pinnacle close.
+
+    Without options: auto-settle every kicked-off pick whose result is in
+    the matches table (run `ingest --refresh` first), then attach CLV.
+    Unmatched picks are listed, never guessed.
+    """
+    from pitchprob.data.orm import Pick
+    from pitchprob.services.ledger import attach_clv, auto_settle, settle_pick
+
+    configure_logging(get_settings().log_level)
+    if (pick_id is None) != (score is None):
+        raise typer.BadParameter("--id and --result go together")
+    now = datetime.now(tz=UTC)
+    with session_scope() as session:
+        if pick_id is not None and score is not None:
+            pick = session.get(Pick, pick_id)
+            if pick is None:
+                raise typer.BadParameter(f"no pick #{pick_id}")
+            try:
+                ft_home_s, _, ft_away_s = score.partition(":")
+                ft_home, ft_away = int(ft_home_s), int(ft_away_s)
+            except ValueError as exc:
+                raise typer.BadParameter(
+                    f"--result expects H:A, got {score!r}"
+                ) from exc
+            settle_pick(pick, ft_home=ft_home, ft_away=ft_away, settled_at=now)
+            typer.echo(
+                f"settled pick #{pick_id}: {ft_home}:{ft_away}, gross return "
+                f"{pick.gross_return_pln} PLN"
+            )
+        else:
+            summary = auto_settle(session, now=now)
+            typer.echo(
+                f"auto-settled {summary.settled} picks "
+                f"({summary.pending} pending)"
+            )
+            for description in summary.unmatched:
+                typer.echo(
+                    "  unmatched (settle with --id/--result or extend the "
+                    f"odds-api name map): {description}"
+                )
+        clv = attach_clv(session, now=now)
+        typer.echo(
+            f"CLV attached to {clv.attached} picks "
+            f"(skipped: {clv.skipped_no_event} without event id, "
+            f"{clv.skipped_no_closing} without tape closing)"
+        )
+
+
+@pick_app.command("list")
+def pick_list() -> None:
+    """The ledger: every pick with settlement and CLV decomposition."""
+    from sqlalchemy import select as sa_select
+
+    from pitchprob.data.orm import Pick
+    from pitchprob.services.ledger import ledger_summary
+
+    configure_logging(get_settings().log_level)
+    with session_scope() as session:
+        picks = (
+            session.execute(sa_select(Pick).order_by(Pick.placed_at, Pick.id))
+            .scalars()
+            .all()
+        )
+        for pick in picks:
+            line_label = (
+                f" {_price_str(pick.line)}" if pick.line is not None else ""
+            )
+            returned = (
+                f"{pick.gross_return_pln}"
+                if pick.gross_return_pln is not None
+                else "open"
+            )
+            typer.echo(
+                f"#{pick.id} {pick.kickoff_utc:%Y-%m-%d} "
+                f"{pick.home_team} vs {pick.away_team} | "
+                f"{pick.market}{line_label} {pick.selection} @ "
+                f"{pick.bookmaker} {_price_str(pick.price_quoted)}"
+                f"{' (tax-free)' if pick.tax_free else ''} "
+                f"stake {pick.stake_pln} | return {returned} | "
+                f"clv exec {_signed_pct(pick.clv_exec)} "
+                f"sharp {_signed_pct(pick.clv_sharp)}"
+            )
+        summary = ledger_summary(session)
+    roi = summary["roi"]
+    typer.echo(
+        f"picks {summary['n_picks']} | settled {summary['n_settled']} | "
+        f"staked {summary['total_staked_pln']:.2f} PLN | "
+        f"returned {summary['total_returned_pln']:.2f} PLN | "
+        f"profit {summary['profit_pln']:+.2f} PLN | "
+        f"ROI {_signed_pct(roi) if roi is not None else '—'}"
+    )
+    typer.echo(
+        f"CLV (n={summary['n_with_clv']}): "
+        f"exec {_signed_pct(summary['mean_clv_exec'])} | "
+        f"sharp {_signed_pct(summary['mean_clv_sharp'])} | "
+        f"shopping {_signed_pct(summary['mean_shopping_value'])}"
+    )
+
+
 study_app = typer.Typer(
     no_args_is_help=True,
     help="Market-information studies (Phase 1 of the ADR 0010 program).",

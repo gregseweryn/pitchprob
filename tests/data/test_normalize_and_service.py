@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
-from pitchprob.data.normalize import canonical_team_name
+from pitchprob.data.normalize import canonical_team_name, odds_api_canonical
 from pitchprob.data.orm import Base, Match, OddsQuote, Team
 from pitchprob.data.service import IngestionService
 
@@ -25,6 +25,21 @@ class TestCanonicalTeamName:
 
     def test_unknown_names_pass_through(self) -> None:
         assert canonical_team_name("Arsenal") == "Arsenal"
+
+
+class TestOddsApiCanonical:
+    def test_known_tape_spellings_map_to_canonical(self) -> None:
+        assert odds_api_canonical("Brighton and Hove Albion") == "Brighton"
+        assert odds_api_canonical("AFC Bournemouth") == "Bournemouth"
+        assert odds_api_canonical("Inter Milan") == "Inter"
+        assert odds_api_canonical("Paris Saint Germain") == "Paris Saint-Germain"
+
+    def test_full_names_already_canonical_pass_through(self) -> None:
+        # The Odds API mostly uses full club names, which *are* canonical.
+        assert odds_api_canonical("Wolverhampton Wanderers") == (
+            "Wolverhampton Wanderers"
+        )
+        assert odds_api_canonical("Arsenal") == "Arsenal"
 
 
 def _modern_csv(rows: list[dict[str, str]]) -> bytes:

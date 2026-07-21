@@ -205,6 +205,63 @@ class Backtest(Base):
     metrics: Mapped[dict[str, Any]] = mapped_column(JsonType, default=dict)
 
 
+class Pick(Base):
+    """One real-money bet by the operator — the forward CLV ledger (Phase 5).
+
+    Teams carry raw tape naming (same rule as ``odds_ticks``: canonical
+    resolution happens at analysis time). Prices: ``price_quoted`` is what
+    the Polish book displayed; ``price_effective`` is what it actually pays
+    per unit staked (x0.88 taxed, x1.0 tax-free) — settlement and
+    ``clv_exec`` run on the effective price because the ledger measures PLN
+    reality, not menu prices. ``price_sharp`` is the Pinnacle quote for the
+    same selection at bet time (from the tape), so every pick decomposes as
+    clv_sharp = timing vs the close and clv_exec - clv_sharp = venue/price
+    shopping (the ADR 0011 two-label design, per bet). ``closing_observed_at``
+    keeps the honesty timestamp: the daily tape's "close" can be hours old.
+    """
+
+    __tablename__ = "picks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    event_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    home_team: Mapped[str] = mapped_column(String(64))
+    away_team: Mapped[str] = mapped_column(String(64))
+    kickoff_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    market: Mapped[str] = mapped_column(String(16))
+    selection: Mapped[str] = mapped_column(String(16))
+    line: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    bookmaker: Mapped[str] = mapped_column(String(32))
+    stake_pln: Mapped[Decimal] = mapped_column(Numeric(8, 2))
+    price_quoted: Mapped[Decimal] = mapped_column(Numeric(8, 3))
+    tax_free: Mapped[bool] = mapped_column(Boolean, default=False)
+    price_effective: Mapped[Decimal] = mapped_column(Numeric(9, 5))
+    placed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    price_sharp: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
+    sharp_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    ft_home: Mapped[int | None]
+    ft_away: Mapped[int | None]
+    gross_return_pln: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 2), nullable=True
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    closing_fair_prob: Mapped[float | None]
+    closing_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    clv_exec: Mapped[float | None]
+    clv_sharp: Mapped[float | None]
+
+    notes: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
 class OddsTick(Base):
     """Append-only live odds tape (ADR 0012).
 

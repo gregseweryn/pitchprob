@@ -146,6 +146,36 @@ def api_football_canonical(name: str) -> str:
     return _API_FOOTBALL_OVERRIDES.get(name, name)
 
 
+#: The Odds API (odds tape, ADR 0012) team names that differ from canonical
+#: spellings. The tape stores raw naming by design; this map is applied at
+#: analysis time (pick auto-settlement) and grows iteratively from the
+#: ledger's "unmatched" reports, exactly like the other source maps.
+_ODDS_API_OVERRIDES: dict[str, str] = {
+    # England
+    "AFC Bournemouth": "Bournemouth",
+    "Brighton and Hove Albion": "Brighton",
+    # Spain
+    "Atlético Madrid": "Atletico Madrid",
+    "Real Betis Balompié": "Real Betis",
+    # Germany
+    "Bayern München": "Bayern Munich",
+    "Borussia Mönchengladbach": "Borussia Monchengladbach",
+    "FC Köln": "FC Cologne",
+    "1. FSV Mainz 05": "Mainz 05",
+    "VfL Wolfsburg": "Wolfsburg",
+    "VfL Bochum": "Bochum",
+    "SC Freiburg": "Freiburg",
+    # Italy
+    "Inter Milan": "Inter",
+    # France
+    "Paris Saint Germain": "Paris Saint-Germain",
+}
+
+
+def odds_api_canonical(name: str) -> str:
+    return _ODDS_API_OVERRIDES.get(name, name)
+
+
 _NOISE_TOKENS = frozenset(
     {"fc", "cf", "sd", "sv", "ac", "as", "calcio", "1913", "2013", "04", "05", "96", "1899"}
 )
