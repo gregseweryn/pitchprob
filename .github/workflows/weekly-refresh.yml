@@ -1,0 +1,74 @@
+name: weekly-refresh
+
+# Results + xG refresh in the cloud (docs/RUNBOOK-2026-27.md).
+#
+# Wednesday and Saturday, 06:30 UTC (08:30 CEST): football-data.co.uk
+# refreshes its season files on a Friday/Tuesday cadence (audit A2), so
+# Wednesday catches Tuesday's snapshot with the weekend's results and
+# Saturday catches Friday's with the midweek round.
+#
+# This replaces scripts/weekly-refresh.sh on the operator's machine, which
+# only worked while that machine was awake. It needs a hosted database:
+# PITCHPROB_DATABASE_URL in repo secrets. Without it every step would fail
+# in a confusing way, so the guard below stops early and says what to do.
+on:
+  schedule:
+    - cron: "30 6 * * 3,6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      PITCHPROB_DATABASE_URL: ${{ secrets.PITCHPROB_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+
+      - name: Require a hosted database
+        run: |
+          if [ -z "$PITCHPROB_DATABASE_URL" ]; then
+            echo "::error::PITCHPROB_DATABASE_URL secret is not set. Add the"\
+                 "hosted Postgres connection string in Settings > Secrets >"\
+                 "Actions, then re-run. See docs/RUNBOOK-2026-27.md."
+            exit 1
+          fi
+
+      - run: uv sync --frozen
+      - run: uv run alembic upgrade head
+
+      # Current season only: --refresh busts the download cache, because its
+      # file grows every round. Past seasons never change and stay cached.
+      - name: Ingest results
+        run: uv run pitchprob ingest --all --from-year 2026 --to-year 2026 --refresh
+      - name: Attach xG
+        run: uv run pitchprob xg --all --from-year 2026 --to-year 2026 --refresh
+
+      # The tape lives in this repo (the recorder commits it daily), so the
+      # checkout above is all import-tape needs.
+      - name: Merge the odds tape
+        run: uv run pitchprob import-tape
+      - name: Settle picks and attach CLV
+        run: uv run pitchprob pick settle
+
+      # The freshness gate is reported, not enforced. A red X here would
+      # mean "the season has not started yet" for the first weeks of every
+      # season, and a check that cries wolf gets muted — precisely when it
+      # later has something real to say. The pipeline steps above already
+      # fail loudly if anything actually breaks.
+      - name: Freshness gate
+        if: always()
+        run: |
+          {
+            echo "## Freshness gate"
+            echo '```'
+            uv run pitchprob status || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
