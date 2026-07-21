@@ -131,7 +131,7 @@ export function BookView({ book }: { book: MarketBook }) {
       </div>
 
       {value ? (
-        <Panel title="Value vs offered odds (quarter-Kelly)">
+        <Panel title="Value vs offered odds (Dixon-Coles + Shin market blend, quarter-Kelly)">
           <DataTable
             head={["selection", "offered", "fair", "EV", "kelly"]}
             rows={(["home", "draw", "away"] as const).map((selection) => {

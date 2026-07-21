@@ -23,6 +23,8 @@ export type Outcome3 = { home: number; draw: number; away: number };
 export type ValueEntry = {
   offered_price: number;
   model_probability: number;
+  market_probability: number;
+  p_bet: number;
   fair_price: number;
   expected_value: number;
   kelly_fraction: number;

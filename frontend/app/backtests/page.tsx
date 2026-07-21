@@ -1,5 +1,6 @@
 import { getBacktests } from "@/lib/api";
 import { Panel } from "@/components/ui";
+import { ciRange, type Interval } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,10 @@ type Metrics = {
     n_bets?: number;
     roi?: number;
     mean_clv?: number | null;
+    mean_clv_sharp?: number | null;
+    roi_ci?: Interval;
+    clv_ci?: Interval;
+    clv_sharp_ci?: Interval;
   };
 };
 
@@ -26,6 +31,11 @@ function num(value: number | undefined | null, digits = 4): string {
 
 function pctOrDash(value: number | undefined | null): string {
   return value === undefined || value === null ? "—" : `${(100 * value).toFixed(1)}%`;
+}
+
+function CiLine({ interval }: { interval: Interval | undefined }) {
+  const text = ciRange(interval);
+  return text ? <span className="block text-xs text-ink-muted">{text}</span> : null;
 }
 
 export default async function BacktestsPage() {
@@ -43,8 +53,10 @@ export default async function BacktestsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Backtests</h1>
         <p className="mt-1 max-w-[65ch] text-sm text-ink-muted">
           Every stored walk-forward run — the model against the margin-removed closing
-          line, and what flat staking would have done. Negative ROI rows are the honest
-          ones.
+          line, and what flat staking would have done. Sub-lines are block-bootstrap
+          95% CIs; sharp CLV (vs the Pinnacle close fair) is the timing-only endpoint
+          of ADR 0011 — exec CLV without it is line shopping. Negative ROI rows are
+          the honest ones.
         </p>
       </div>
 
@@ -64,7 +76,7 @@ export default async function BacktestsPage() {
         </Panel>
       ) : (
         <div className="overflow-x-auto rounded-md border border-line">
-          <table className="w-full min-w-[880px] text-sm">
+          <table className="w-full min-w-[1000px] text-sm">
             <thead>
               <tr className="bg-surface text-left text-xs text-ink-muted">
                 {[
@@ -78,7 +90,8 @@ export default async function BacktestsPage() {
                   "closing RPS",
                   "bets",
                   "ROI",
-                  "CLV",
+                  "exec CLV",
+                  "sharp CLV",
                 ].map((label, i) => (
                   <th
                     key={label}
@@ -127,9 +140,15 @@ export default async function BacktestsPage() {
                       }`}
                     >
                       {pctOrDash(metrics.staking_flat?.roi)}
+                      <CiLine interval={metrics.staking_flat?.roi_ci} />
                     </td>
                     <td className="num px-3 py-2 text-right">
                       {pctOrDash(metrics.staking_flat?.mean_clv)}
+                      <CiLine interval={metrics.staking_flat?.clv_ci} />
+                    </td>
+                    <td className="num px-3 py-2 text-right">
+                      {pctOrDash(metrics.staking_flat?.mean_clv_sharp)}
+                      <CiLine interval={metrics.staking_flat?.clv_sharp_ci} />
                     </td>
                   </tr>
                 );
