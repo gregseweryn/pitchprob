@@ -391,14 +391,19 @@ The measurement instrument for 2026/27. Two commands, one thesis: after the
 Phase 0–2a nulls the model is not the edge, so the **sharp anchor is
 primary** — Shin-de-margined Pinnacle from the tape — and the model fair is
 informational only. Because Polish books collect a **12% turnover tax on the
-stake**, every comparison runs on *effective* prices (`quoted × 0.88`, or
-`× 1.0` under a tax-free promo). That tax is larger than any edge this
-project has ever measured, which is why "NO BET" is the expected output.
+stake**, every comparison runs on *effective* prices, and the scanner routes
+the tax regime itself (ADR 0017): `× 1.0` while any of Betclic's 1,000 PLN
+"Bez Podatku 2.0" allowance remains (a straddling stake qualifies in full,
+§3 ust. 4), `× 0.94` past the limit for singles (§3 ust. 11 pkt 1), `× 0.88`
+with no promo — degrading only downward, from the allowance state in the
+ledger. That tax is larger than any edge this project has ever measured,
+which is why "NO BET" is the expected output.
 
 ```bash
-# Scanner: the operator types the PL prices he sees; the system verdicts them.
+# Scanner: the operator types the PL prices he sees; the system verdicts
+# them. The tax regime derives itself; flags only force what the coupon showed.
 uv run pitchprob scan "arsenal" --market ou --selection over --line 3.0 \
-    --quote betclic:2.10 --quote sts:2.05 --tax-free betclic
+    --quote betclic:2.10 --quote sts:2.05
 ```
 
 ```
@@ -408,13 +413,18 @@ PLAY       betclic     quoted 2.10  eff 2.10  edge   +5.0%  promo +12.6pp
 NO BET     sts         quoted 2.05  eff 1.80  edge   -9.8%
 ```
 
-Same price, opposite verdicts: Betclic's "Gra bez podatku 2.0" (first 1,000
-PLN of stakes unconditionally tax-free) is worth +13.6% of payout — more
-than any model edge measured here, which is what makes it the default venue
-for a 2–5 PLN measurement season. Promotions are priced as **instruments**,
-not footnotes: `promo_ev` values a quote bare-and-taxed versus with its promo
-(tax-free, boosted price, payout haircut for conditioned winnings), so
-`promo_value` is the EV the promotion itself contributes.
+Same price, opposite verdicts: Betclic's "Bez Podatku 2.0" (every bet
+tax-free while any of the 1,000 PLN turnover limit remains) is worth +13.6%
+of payout — more than any model edge measured here, which is what makes it
+the default venue for a 2–5 PLN measurement season. Promotions are priced as
+**instruments**, not footnotes: `promo_ev` values a quote bare-and-taxed
+versus with its promo (tax multiplier, boosted price, payout haircut for
+conditioned winnings), so `promo_value` is the EV the promotion itself
+contributes. Promo terms are **configuration, not code** — Betclic can
+withdraw the offer on 24h notice (§8), and `PITCHPROB_DISABLED_PROMOS=betclic`
+prices every surface back at × 0.88 without a deploy. The regime shown on
+the bookmaker's coupon is decisive; the ledger's allowance only counts bets
+logged in it.
 
 Two refusals are deliberate. A line the tape does not currently quote yields
 **NO ANCHOR**, never a comparison against a neighbouring line; and an anchor
@@ -424,8 +434,9 @@ is a prompt to fix the recorder rather than a basis for a bet.
 
 ```bash
 # Ledger: log the executed bet, settle it, watch CLV — the decision variable.
+# The tax regime records itself (--tax-free/--taxed force what the coupon showed).
 uv run pitchprob pick log --match "arsenal" --market ou --selection over \
-    --line 3.0 --book betclic --stake 5 --price 2.10 --tax-free
+    --line 3.0 --book betclic --stake 5 --price 2.10
 uv run pitchprob pick settle     # auto: results from `matches`, CLV from the tape
 uv run pitchprob pick list
 ```
@@ -438,8 +449,12 @@ price actually executed after tax or promo. Their difference is the
 venue/shopping/promo component, which under the Phase 0–2a verdicts is the
 only place value can live. When the season ends, the ledger will say which
 one paid. Picks whose result cannot be matched are listed, never guessed;
-tax-free stakes beyond the 1,000 PLN allowance are refused rather than
-silently mispriced.
+each pick records the exact payout multiplier (`tax_multiplier`), a spent
+allowance degrades new Betclic singles to × 0.94 automatically, and *forcing*
+tax-free past the limit is refused rather than silently mispriced. The
+AKO-ballast route to restoring × 1.0 past the limit was priced and declined
+(ADR 0017): break-even needs ≤3.1% margin per leg, and it would corrupt the
+CLV sample the season exists to collect.
 
 #### Corners, the line-latency map, and a Polish quote feed (ADR 0014)
 
@@ -666,7 +681,7 @@ src/pitchprob/
 
 Postgres 16 is the system of record (long-format odds/predictions, ADR 0003) with
 Alembic migrations; the code is dialect-portable and runs unmodified on SQLite for
-zero-dependency development. See `docs/adr/` for the 16 architecture decision
+zero-dependency development. See `docs/adr/` for the 17 architecture decision
 records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing

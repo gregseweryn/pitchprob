@@ -48,6 +48,13 @@ turnover allowance per bookmaker and **refuses** a tax-free pick that no
 longer fits, because past the limit the promo requires a ≥50%-odds AKO that
 a single cannot satisfy.
 
+> **Correction (2026-07-22, ADR 0017).** The full regulamin says otherwise
+> on two points: a stake straddling the limit qualifies *in full* (§3
+> ust. 4), and past the limit singles pay Wskaźnik **0,94** — a 6% tax —
+> not the bare x0.88 (§3 ust. 11 pkt 1); the ≥50%-AKO share restores 1,0
+> on everything, it is not a precondition for any relief. The allowance
+> logic and the regime routing now live in ADR 0017.
+
 **4. Freshness is payload, not metadata.** The tape snapshots daily, so the
 "live" anchor can be hours old. `fair_at` returns the latest **complete**
 selection set at or before the asked-for instant — never a later one — and

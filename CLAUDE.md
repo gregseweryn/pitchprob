@@ -18,8 +18,8 @@ OU/AH multi-market betting, block-bootstrap CIs, `pitchprob experiment
 run|compare` registry with paired significance). Data: 21,589 matches (top-5
 European leagues 2014/15–2025/26, football-data.co.uk; Pinnacle close covers
 20,733 and open 20,717 of them), 99.98% Understat xG coverage, 40,500
-API-Football injury records (seasons 2022–24). ~700 tests, mypy --strict,
-16 ADRs in `docs/adr/` (read them before changing anything they cover).
+API-Football injury records (seasons 2022–24). ~750 tests, mypy --strict,
+17 ADRs in `docs/adr/` (read them before changing anything they cover).
 
 The syndicate-transformation roadmap (approved 2026-07-18, plan file
 `~/.claude/plans/you-are-a-principal-proud-patterson.md`) continues: Phase 1
@@ -86,7 +86,7 @@ uv run pitchprob backtest --at open --markets 1x2,ou,ah   # syndicate clock
 uv run pitchprob experiment compare ... --vs ablate=absences  # paired A/B
 uv run pitchprob record-odds --league all   # daily odds tape (ADR 0012, ~15 credits)
 uv run pitchprob scan "arsenal" --market ou --selection over --line 3.0 \
-    --quote betclic:2.10 --tax-free betclic   # PL scanner (ADR 0013)
+    --quote betclic:2.10   # PL scanner (ADR 0013; tax regime auto, ADR 0017)
 uv run pitchprob pick log|settle|list        # forward real-money CLV ledger
 uv run pitchprob record-corners --league E0  # corners tape, T-26h (ADR 0014)
 uv run pitchprob study latency               # who copies the sharp line last
@@ -262,6 +262,24 @@ primary endpoint null (log-loss Δ−0.0011 p=0.71, RPS p=0.99, ROI p=0.31,
 exec-CLV p=0.47), matching the published table. The null is now backed by a
 stored run, not a description; the spend gate (paid player data / LLM news)
 stays closed on measured evidence. A1 fully closed.
+
+**Betclic "Bez Podatku 2.0" auto-regime built (ADR 0017, 2026-07-22).** The
+operator read the full regulamin; it invalidated three baked-in assumptions
+and exposed a P0: the watch loop priced Betclic feed quotes ×0.88,
+understating edge by 12 pp (the whole season fits the 1,000 PLN limit, so
+the true multiplier is ×1.0). Now: `scan()` is the effective-price router —
+an undeclared quote gets its regime from `betting/promos.py` (registry as
+data: aliases "Betclic PL"/"betclic", limit, ×0.94 post-limit per §3
+ust. 11 pkt 1) plus the ledger allowance (§3 ust. 4: a straddling stake
+qualifies in full ⇒ the decision is stake-independent), degrading only
+downward 1,0→0,94→0,88; explicit declarations always win.
+`PITCHPROB_DISABLED_PROMOS=betclic` is the §8 kill switch (offer cancellable
+in 24h). `picks.tax_multiplier` (migration `c5a9d7e1f3b6`) records the
+exact regime per bet; `pick log` derives it automatically
+(`--tax-free`/`--taxed` force). Caveats updated (three regimes, ledger-drift
+warning, coupon-screen-decides). AKO ballast priced and declined in ADR
+0017: break-even ≤3.1% margin/leg, conflicts with ADR 0015 sample design;
+moot within the limit. Feed stays UNVERIFIED (ADR 0014 unchanged).
 
 **Next task:** extend `_ODDS_API_OVERRIDES` in `data/normalize.py` from the
 first real "unmatched" reports once the season starts. Open research lanes
