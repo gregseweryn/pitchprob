@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     #: healthchecks.io ping URL for the watch loop — pinged after each pass so
     #: a silently dead loop raises an alarm. Optional; no URL, no ping.
     healthchecks_watch_url: str | None = None
+    #: CSV of canonical bookmaker keys whose promotions are switched off
+    #: (e.g. "betclic"). The §8 kill switch (ADR 0017): Betclic may withdraw
+    #: "Bez Podatku 2.0" on 24h notice, and this flips every surface back to
+    #: bare x0.88 pricing without a code change.
+    disabled_promos: str = ""
 
 
 @lru_cache(maxsize=1)
