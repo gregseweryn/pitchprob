@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     #: odds-api.io key (Polish-book feed; free tier = 2 books, 100 req/h —
     #: ADR 0014). Optional: everything works without it, with manual entry.
     odds_api_io_key: str | None = None
+    #: Telegram bot credentials for the speaking loop (ADR 0016). Both must
+    #: be set for `pitchprob watch` to push; without them it prints to stdout.
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    #: healthchecks.io ping URL for the watch loop — pinged after each pass so
+    #: a silently dead loop raises an alarm. Optional; no URL, no ping.
+    healthchecks_watch_url: str | None = None
 
 
 @lru_cache(maxsize=1)

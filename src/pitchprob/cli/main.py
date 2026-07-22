@@ -4,8 +4,9 @@ Every command opens its own transactional session; ``_make_downloader`` is a
 seam that tests replace with an offline fake.
 """
 
+import contextlib
 import json as json_lib
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -1496,6 +1497,69 @@ def oddsio_probe(
             typer.echo(f"  {name}  ->  {mapped or '(unmapped, skipped)'}")
 
 
+@oddsio_app.command("poll")
+def oddsio_poll(
+    books: Annotated[
+        str,
+        typer.Option(
+            help="Comma list of feed bookmaker names; empty = the key's "
+            "selected books (avoids a 403 on an unselected book)"
+        ),
+    ] = "",
+    within_hours: Annotated[
+        int, typer.Option(help="Only fixtures kicking off within this window")
+    ] = 48,
+    league: Annotated[
+        str | None, typer.Option(help="Feed league slug to restrict to")
+    ] = None,
+    max_events: Annotated[
+        int, typer.Option(help="Request cap per sweep (free tier: 100 req/h)")
+    ] = 40,
+    all_events: Annotated[
+        bool,
+        typer.Option(
+            "--all-events",
+            help="Request every in-window fixture, not just tape-anchored ones "
+            "(spends far more of the free-tier quota)",
+        ),
+    ] = False,
+) -> None:
+    """Sweep upcoming PL fixtures on the feed into the tape (source=odds-api-io).
+
+    The scheduled poller behind the speaking loop (ADR 0016): run it on the
+    always-on machine every few minutes, denser near kickoff. Feed prices
+    stay UNVERIFIED until quote-check clears them (ADR 0014).
+    """
+    from pitchprob.data.adapters.odds_api_io import scrub_http_error
+    from pitchprob.services.recorder import record_oddsio_snapshot
+
+    configure_logging(get_settings().log_level)
+    client = _oddsio_client()
+    book_list = [b.strip() for b in books.split(",") if b.strip()] or None
+    try:
+        with session_scope() as session:
+            summary = record_oddsio_snapshot(
+                session,
+                client,
+                books=book_list,
+                within_hours=within_hours,
+                league=league,
+                max_events=max_events,
+                anchor_only=not all_events,
+            )
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        raise typer.Exit(code=1) from None
+    typer.echo(
+        f"swept {summary.events_requested} fixtures in the next {within_hours}h "
+        f"({summary.events_in_window} in window, {summary.events_priced} priced) "
+        f"-> {summary.ticks_inserted} ticks from "
+        f"{', '.join(summary.bookmakers) or '(none)'}"
+    )
+    if summary.stop_reason is not None:
+        typer.echo(f"stopped early: {summary.stop_reason}")
+
+
 @oddsio_app.command("record")
 def oddsio_record(
     event_id: Annotated[str, typer.Option(help="Feed event id")],
@@ -1718,6 +1782,97 @@ def status_command() -> None:
     if not result.all_ok:
         raise typer.Exit(code=1)
     typer.echo("all checks passed — the data is current enough to act on")
+
+
+@app.command("watch")
+def watch_command(
+    interval: Annotated[
+        int, typer.Option(help="Seconds between passes (ignored with --once)")
+    ] = 300,
+    once: Annotated[
+        bool, typer.Option(help="Run a single pass and exit")
+    ] = False,
+    min_edge: Annotated[
+        float,
+        typer.Option(help="Minimum effective edge vs the sharp anchor before an alert"),
+    ] = 0.02,
+    window_hours: Annotated[
+        int, typer.Option(help="How far ahead (hours) to scan for fixtures")
+    ] = 72,
+    book: Annotated[
+        list[str] | None,
+        typer.Option("--book", help="Restrict to these bookmakers (repeatable)"),
+    ] = None,
+    market: Annotated[
+        list[str] | None,
+        typer.Option("--market", help="Restrict to these markets (repeatable)"),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(help="Print alerts to stdout instead of pushing to Telegram"),
+    ] = False,
+) -> None:
+    """The speaking loop (ADR 0016): scan upcoming PL quotes, push GRAJ/LEAD.
+
+    Feed-driven and silent by default — it speaks only when an effective edge
+    clears the threshold, the anchor is fresh, and the bet fits the risk
+    limits (ADR 0015). Feed prices are unvalidated, so they push as UNVERIFIED
+    leads, never an auto-PLAY (ADR 0014). Runs forever unless --once; each
+    standing edge is announced once (the ``sent_alerts`` dedup log).
+    """
+    from time import sleep
+
+    from pitchprob.services.alerts import (
+        Notifier,
+        StdoutNotifier,
+        TelegramNotifier,
+    )
+    from pitchprob.services.watch import run_watch
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    notifier: Notifier
+    if dry_run:
+        notifier = StdoutNotifier()
+    elif settings.telegram_bot_token and settings.telegram_chat_id:
+        notifier = TelegramNotifier(
+            settings.telegram_bot_token, settings.telegram_chat_id
+        )
+    else:
+        typer.echo(
+            "no PITCHPROB_TELEGRAM_BOT_TOKEN/CHAT_ID set — printing alerts to "
+            "stdout (set both to push to Telegram, or pass --dry-run to silence "
+            "this notice)"
+        )
+        notifier = StdoutNotifier()
+
+    books = frozenset(book) if book else None
+    markets = frozenset(market) if market else None
+    window = timedelta(hours=window_hours)
+
+    while True:
+        with session_scope() as session:
+            result = run_watch(
+                session,
+                notifier,
+                min_edge=min_edge,
+                window=window,
+                markets=markets,
+                books=books,
+            )
+        typer.echo(
+            f"[{datetime.now(tz=UTC):%Y-%m-%d %H:%M:%S} UTC] "
+            f"scanned {result.events_scanned} events · sent {len(result.alerts)} · "
+            f"{result.suppressed_duplicates} already announced"
+        )
+        if settings.healthchecks_watch_url:
+            # a missed heartbeat must not crash the loop
+            with contextlib.suppress(httpx.HTTPError):
+                httpx.get(settings.healthchecks_watch_url, timeout=10.0)
+        if once:
+            break
+        sleep(interval)
 
 
 def main() -> None:
