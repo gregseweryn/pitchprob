@@ -5,8 +5,12 @@ the scanner verdicts each against the **live Pinnacle fair from the tape**
 (primary — the sharp anchor *is* the edge thesis; per the Phase 0-2a
 verdicts the model does not outpredict the market) and, optionally, a model
 fair (secondary, informational — it never flips a verdict). Comparisons run
-on *effective* prices: x0.88 for taxed PL books, x1.0 under a tax-free
-promo, boosted quotes priced as instruments via ``promo_ev``.
+on *effective* prices, and ``scan`` is the effective-price router: a quote
+whose tax regime is undeclared gets it from the promo registry
+(``betting.promos``) plus the ledger's allowance state — x1.0 inside
+Betclic's Bez Podatku limit, x0.94 past it, x0.88 with no promo — degrading
+only downward. An explicit declaration always wins; boosted quotes are
+priced as instruments via ``promo_ev``.
 
 Expect mostly "NO BET": the 12% turnover tax sits in the prices. Value
 appears in boosts/promos and in slow-moving PL prices after the sharp line
@@ -18,7 +22,7 @@ than ``max_anchor_age`` downgrades PLAY to STALE — a stale sharp line is
 not a betting basis, it is a prompt to refresh the tape.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
@@ -27,9 +31,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pitchprob.betting.effective import PromoEvaluation, PromoTerms, promo_ev
+from pitchprob.betting.promos import active_promo, auto_terms
 from pitchprob.data.adapters.odds_api_io import SOURCE as FEED_SOURCE
 from pitchprob.data.normalize import canonical_team_name, odds_api_canonical
 from pitchprob.data.orm import OddsTick
+from pitchprob.services.ledger import tax_free_allowance
 from pitchprob.services.tape import (
     FairQuote,
     as_utc,
@@ -46,9 +52,19 @@ SCANNER_CAVEATS: tuple[str, ...] = (
     "to cena rynkowa, nie prognoza modelu. Model nie wygrywa z rynkiem "
     "(sprawdzone w fazach 0-2a), więc jego fair pokazujemy wyłącznie "
     "informacyjnie i nigdy nie zmienia werdyktu.",
-    "Wszystko liczymy na kursach efektywnych: x0,88 przy 12% podatku od "
-    "stawki, x1,0 pod promocją bez podatku. Opodatkowany faworyt poniżej "
-    "kursu ~1,14 zwraca mniej niż stawkę, nawet gdy wygra.",
+    "Wszystko liczymy na kursach efektywnych: x1,0 w ramach limitu 1000 zł "
+    "promocji \"Bez Podatku 2.0\" (dopóki cokolwiek z limitu zostaje, cały "
+    "zakład kwalifikuje się w całości), x0,94 po wyczerpaniu limitu dla "
+    "singli, x0,88 bez promocji (12% podatku od stawki). Reżim dobierany "
+    "jest automatycznie ze stanu limitu w rejestrze zakładów i degraduje "
+    "wyłącznie w dół. Opodatkowany faworyt poniżej kursu ~1,14 zwraca mniej "
+    "niż stawkę, nawet gdy wygra.",
+    "Stan limitu liczymy tylko z zakładów zapisanych w rejestrze — kupon "
+    "postawiony poza nim zawyża pozostały limit i tym samym pokazywany "
+    "edge. Betclic może zmienić lub odwołać ofertę z 24-godzinnym "
+    "wyprzedzeniem albo wykluczyć gracza (§4 i §8 regulaminu): reżim "
+    "podatkowy widoczny na kuponie u bukmachera jest rozstrzygający, nie "
+    "nasz.",
     "Taśma nagrywa raz dziennie, więc kotwica bywa sprzed kilku godzin. Jej "
     "wiek jest drukowany przy każdym werdykcie; kotwica starsza niż 30 godzin "
     "zmienia GRAJ na NIEAKTUALNE, bo nieświeża cena ostra to sygnał do "
@@ -198,6 +214,38 @@ def feed_quotes(
     ]
 
 
+def _resolve_promo(
+    session: Session,
+    quote: OperatorQuote,
+    *,
+    disabled: frozenset[str],
+) -> PromoTerms | None:
+    """The quote's promo terms with the tax regime filled in.
+
+    An explicitly declared regime (``tax_free`` or ``tax_multiplier``) is
+    never touched — the operator saw the coupon, the router did not. An
+    undeclared one is derived from the promo registry and the ledger's
+    allowance state, keeping any boost/haircut the quote carried. A book
+    without a registered promo prices at the bare x0.88, the conservative
+    direction.
+    """
+    promo = quote.promo
+    if promo is not None and (promo.tax_free or promo.tax_multiplier is not None):
+        return promo
+    book_promo = active_promo(quote.bookmaker, disabled=disabled)
+    if book_promo is None:
+        return promo
+    allowance = tax_free_allowance(
+        session, book_promo.book, limit=book_promo.tax_free_limit
+    )
+    terms = auto_terms(book_promo, allowance)
+    if promo is None:
+        return terms
+    return replace(
+        promo, tax_free=terms.tax_free, tax_multiplier=terms.tax_multiplier
+    )
+
+
 def _judge(
     edge: float | None,
     *,
@@ -230,6 +278,8 @@ def scan(
     now: datetime | None = None,
     min_edge: float = DEFAULT_MIN_EDGE,
     max_anchor_age: timedelta = DEFAULT_MAX_ANCHOR_AGE,
+    auto_promo: bool = True,
+    disabled_promos: frozenset[str] = frozenset(),
 ) -> ScanResult:
     """Verdict every operator quote for one selection of one fixture.
 
@@ -237,6 +287,10 @@ def scan(
     a Pinnacle fair for a different line is not an anchor (NO ANCHOR beats
     a wrong comparison). The model probability, when supplied, adds an
     informational ``edge_model`` per quote and never changes a verdict.
+
+    ``auto_promo`` routes each undeclared quote through the promo registry
+    (see ``_resolve_promo``); ``disabled_promos`` is the §8 kill switch,
+    wired from ``PITCHPROB_DISABLED_PROMOS`` at the CLI/API edges.
     """
     validate_market_selection(market, selection, line)
     when = now if now is not None else datetime.now(tz=UTC)
@@ -252,14 +306,19 @@ def scan(
 
     verdicts: list[QuoteVerdict] = []
     for quote in quotes:
+        promo = (
+            _resolve_promo(session, quote, disabled=disabled_promos)
+            if auto_promo
+            else quote.promo
+        )
         evaluation = (
-            promo_ev(fair, quote.price, promo=quote.promo)
+            promo_ev(fair, quote.price, promo=promo)
             if fair is not None
             else None
         )
         edge = evaluation.ev_promo if evaluation is not None else None
         edge_model = (
-            promo_ev(model_probability, quote.price, promo=quote.promo).ev_promo
+            promo_ev(model_probability, quote.price, promo=promo).ev_promo
             if model_probability is not None
             else None
         )
@@ -267,7 +326,7 @@ def scan(
             QuoteVerdict(
                 bookmaker=quote.bookmaker,
                 price_quoted=quote.price,
-                promo=quote.promo,
+                promo=promo,
                 source=quote.source,
                 evaluation=evaluation,
                 edge=edge,

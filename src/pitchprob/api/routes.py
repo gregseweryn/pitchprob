@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,8 +27,10 @@ from pitchprob.api.schemas import (
     TapeEventOut,
     VerdictOut,
 )
-from pitchprob.betting.effective import PromoTerms, effective_price
+from pitchprob.betting.effective import TAX_MULTIPLIER, PromoTerms, effective_price
+from pitchprob.betting.promos import parse_disabled
 from pitchprob.betting.risk import RiskRefusal
+from pitchprob.core.config import get_settings
 from pitchprob.core.db import get_session_factory
 from pitchprob.core.errors import UnknownTeamError
 from pitchprob.data.orm import Backtest, League, Match, Pick, Season, Team, TeamAlias
@@ -199,6 +202,15 @@ def list_tape_events(
     ]
 
 
+def _verdict_multiplier(promo: PromoTerms | None) -> Decimal:
+    """The payout regime a verdict was priced under (1.0 / 0.94 / 0.88)."""
+    if promo is None:
+        return TAX_MULTIPLIER
+    if promo.tax_multiplier is not None:
+        return promo.tax_multiplier
+    return Decimal("1") if promo.tax_free else TAX_MULTIPLIER
+
+
 @router.post("/scanner/scan", response_model=ScanResponse)
 def scan_quotes(request: ScanRequest, db: Session = Depends(get_db)) -> ScanResponse:
     """Verdict operator quotes against the tape's Pinnacle fair."""
@@ -234,6 +246,8 @@ def scan_quotes(request: ScanRequest, db: Session = Depends(get_db)) -> ScanResp
             model_probability=request.model_probability,
             now=now,
             min_edge=request.min_edge,
+            # §8 kill switch, wired from PITCHPROB_DISABLED_PROMOS.
+            disabled_promos=parse_disabled(get_settings().disabled_promos),
         )
     except ValueError as exc:
         # Unknown fixture, ambiguous query, bad market/selection shape: all
@@ -270,9 +284,19 @@ def scan_quotes(request: ScanRequest, db: Session = Depends(get_db)) -> ScanResp
                     else effective_price(
                         verdict.price_quoted,
                         tax_free=verdict.promo is not None and verdict.promo.tax_free,
+                        multiplier=(
+                            verdict.promo.tax_multiplier
+                            if verdict.promo is not None
+                            else None
+                        ),
                     )
                 ),
-                tax_free=verdict.promo is not None and verdict.promo.tax_free,
+                tax_free=verdict.promo is not None
+                and (
+                    verdict.promo.tax_free
+                    or verdict.promo.tax_multiplier == Decimal("1")
+                ),
+                tax_multiplier=_verdict_multiplier(verdict.promo),
                 boosted=verdict.promo is not None
                 and verdict.promo.boosted_price is not None,
                 promo_value=(

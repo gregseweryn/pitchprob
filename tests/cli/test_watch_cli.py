@@ -86,7 +86,7 @@ class TestWatchCommand:
         assert "scanned 1 events" in result.output
 
     def test_once_dry_run_is_silent_below_threshold(self, cli_env) -> None:
-        _seed(over_price="2.30")  # edge 0.012 < 0.02
+        _seed(over_price="2.02")  # tax-free Betclic: 0.5 x 2.02 - 1 = 0.01 < 0.02
         result = runner.invoke(cli_main.app, ["watch", "--once", "--dry-run"])
         assert result.exit_code == 0, result.output
         assert "Betclic PL" not in result.output

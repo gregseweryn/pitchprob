@@ -34,6 +34,7 @@ from pitchprob.betting.effective import (
     TaxFreeAllowance,
     effective_price,
 )
+from pitchprob.betting.promos import canonical_bookmaker
 from pitchprob.betting.risk import (
     DEFAULT_BANKROLL_PLN,
     DEFAULT_LIMITS,
@@ -112,13 +113,24 @@ def tax_free_allowance(
     *,
     limit: Decimal = BETCLIC_TAX_FREE_LIMIT,
 ) -> TaxFreeAllowance:
-    """Tax-free turnover already consumed at ``bookmaker`` by logged picks."""
-    used = session.execute(
-        select(func.coalesce(func.sum(Pick.stake_pln), 0)).where(
-            Pick.bookmaker == bookmaker, Pick.tax_free.is_(True)
-        )
-    ).scalar_one()
-    return TaxFreeAllowance(limit=limit, used=Decimal(used))
+    """Tax-free turnover already consumed at ``bookmaker`` by logged picks.
+
+    Matching is canonical: the operator types "betclic", the odds-api.io
+    feed says "Betclic PL", and both must count against the same allowance —
+    a literal comparison would silently split the limit in two. Grouping is
+    Python-side; the picks table is a season of hand-sized bets.
+    """
+    key = canonical_bookmaker(bookmaker)
+    rows = session.execute(
+        select(Pick.bookmaker, func.sum(Pick.stake_pln))
+        .where(Pick.tax_free.is_(True))
+        .group_by(Pick.bookmaker)
+    ).all()
+    used = sum(
+        (Decimal(total) for book, total in rows if canonical_bookmaker(book) == key),
+        Decimal("0"),
+    )
+    return TaxFreeAllowance(limit=limit, used=used)
 
 
 def exposure_state(

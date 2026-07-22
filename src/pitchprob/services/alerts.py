@@ -65,6 +65,11 @@ class Alert:
     anchor_price: Decimal
     anchor_age: timedelta
     suggested_stake_pln: Decimal
+    #: Auto-applied tax regime (1.00 tax-free, 0.94 post-limit); None means
+    #: the bare x0.88. Named in the message because the regime is an
+    #: assumption from the ledger's allowance state until the operator sees
+    #: it on the coupon (§4/§8: the book's screen decides, not us).
+    tax_multiplier: Decimal | None = None
     caveats: tuple[str, ...] = SCANNER_CAVEATS
 
 
@@ -125,6 +130,16 @@ def format_play_alert(alert: Alert) -> str:
         f"przewaga: {100 * alert.edge:+.1f}% vs Pinnacle fair",
         f"kotwica: pinnacle {alert.anchor_price} · wiek {_age(alert.anchor_age)}",
     ]
+    if alert.tax_multiplier is not None and alert.tax_multiplier == Decimal("1"):
+        lines.append(
+            "reżim podatkowy: ×1,00 — Bez Podatku (auto ze stanu limitu; "
+            "potwierdź na kuponie)"
+        )
+    elif alert.tax_multiplier is not None:
+        lines.append(
+            f"reżim podatkowy: ×{alert.tax_multiplier} — po limicie Bez "
+            "Podatku (auto ze stanu limitu; potwierdź na kuponie)"
+        )
     if alert.promo_value is not None:
         lines.append(f"promocja wnosi: {100 * alert.promo_value:+.1f} pp EV")
     lines.append(

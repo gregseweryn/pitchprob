@@ -208,6 +208,7 @@ def _detect(
     books: frozenset[str] | None,
     limits: RiskLimits,
     max_anchor_age: timedelta,
+    disabled_promos: frozenset[str],
 ) -> tuple[list[Alert], int, int]:
     """(new alerts, duplicates suppressed, events scanned)."""
     if breaker_tripped(
@@ -259,6 +260,7 @@ def _detect(
                     now=now,
                     min_edge=min_edge,
                     max_anchor_age=max_anchor_age,
+                    disabled_promos=disabled_promos,
                 )
             except ValueError:
                 continue
@@ -301,6 +303,15 @@ def _detect(
                     if verdict.evaluation is not None
                     else verdict.price_quoted
                 )
+                # The regime the router applied, for the message: exact
+                # multiplier when set, 1.0 from the tax-free sugar, None for
+                # the bare x0.88 default.
+                tax_multiplier: Decimal | None = None
+                if verdict.promo is not None:
+                    if verdict.promo.tax_multiplier is not None:
+                        tax_multiplier = verdict.promo.tax_multiplier
+                    elif verdict.promo.tax_free:
+                        tax_multiplier = Decimal("1")
                 alerts.append(
                     Alert(
                         event_id=event.event_id,
@@ -319,6 +330,7 @@ def _detect(
                         anchor_price=anchor_price,
                         anchor_age=result.anchor_age,
                         suggested_stake_pln=stake,
+                        tax_multiplier=tax_multiplier,
                     )
                 )
     return alerts, suppressed, len(events)
@@ -334,6 +346,7 @@ def find_alerts(
     books: frozenset[str] | None = None,
     limits: RiskLimits = DEFAULT_LIMITS,
     max_anchor_age: timedelta = DEFAULT_MAX_ANCHOR_AGE,
+    disabled_promos: frozenset[str] = frozenset(),
 ) -> list[Alert]:
     """Every fresh, risk-fitting, above-threshold lead not already sent."""
     when = now if now is not None else datetime.now(tz=UTC)
@@ -346,6 +359,7 @@ def find_alerts(
         books=books,
         limits=limits,
         max_anchor_age=max_anchor_age,
+        disabled_promos=disabled_promos,
     )
     return alerts
 
@@ -361,6 +375,7 @@ def run_watch(
     books: frozenset[str] | None = None,
     limits: RiskLimits = DEFAULT_LIMITS,
     max_anchor_age: timedelta = DEFAULT_MAX_ANCHOR_AGE,
+    disabled_promos: frozenset[str] = frozenset(),
     record: bool = True,
 ) -> WatchResult:
     """One pass: detect, deliver, remember.
@@ -379,6 +394,7 @@ def run_watch(
         books=books,
         limits=limits,
         max_anchor_age=max_anchor_age,
+        disabled_promos=disabled_promos,
     )
     sent: list[Alert] = []
     for alert in alerts:

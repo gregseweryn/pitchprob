@@ -124,6 +124,9 @@ class VerdictOut(BaseModel):
     price_quoted: Decimal
     price_effective: Decimal
     tax_free: bool
+    #: The payout regime the router applied: 1.0 tax-free inside the promo
+    #: limit, 0.94 past it, 0.88 bare tax (ADR 0017).
+    tax_multiplier: Decimal
     boosted: bool
     #: EV the promotion itself contributes over the bare taxed quote.
     promo_value: float | None

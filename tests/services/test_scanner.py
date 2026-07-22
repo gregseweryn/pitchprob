@@ -15,9 +15,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from pitchprob.betting.effective import PromoTerms
+from pitchprob.betting.effective import TAX_MULTIPLIER, PromoTerms
 from pitchprob.betting.odds_math import remove_overround_shin
-from pitchprob.data.orm import Base, OddsTick
+from pitchprob.data.orm import Base, OddsTick, Pick
 from pitchprob.services.scanner import OperatorQuote, scan
 
 _KICKOFF = datetime(2026, 8, 21, 19, 0, tzinfo=UTC)
@@ -243,6 +243,103 @@ class TestScanVerdicts:
         # model says +21.2% — but the market anchor gates the verdict
         assert verdict.edge_model == pytest.approx(0.60 * 2.02 - 1.0)
         assert verdict.verdict == "NO BET"
+
+
+class TestAutoPromoRegime:
+    """scan() is the effective-price router: a quote whose tax regime is
+    undeclared gets it from the promo registry + the ledger's allowance
+    state, degrading only downward (1.0 → 0.94 → 0.88). An explicit
+    declaration always wins."""
+
+    def _spend_allowance(self, session: Session) -> None:
+        session.add(
+            Pick(
+                created_at=_NOW - timedelta(days=7),
+                home_team="Someone",
+                away_team="Else",
+                kickoff_utc=_NOW - timedelta(days=6),
+                market="1x2",
+                selection="home",
+                bookmaker="betclic",
+                stake_pln=Decimal("1000"),
+                price_quoted=Decimal("2.0"),
+                tax_free=True,
+                price_effective=Decimal("2.0"),
+                placed_at=_NOW - timedelta(days=7),
+            )
+        )
+        session.flush()
+
+    def _scan_betclic(
+        self,
+        session: Session,
+        *,
+        price: str = "2.10",
+        promo: PromoTerms | None = None,
+        disabled: frozenset[str] = frozenset(),
+    ):
+        return scan(
+            session,
+            query="arsenal",
+            market="ou",
+            selection="over",
+            line=Decimal("3.0"),
+            quotes=[OperatorQuote("betclic", Decimal(price), promo=promo)],
+            now=_NOW,
+            disabled_promos=disabled,
+        )
+
+    def test_bare_betclic_quote_prices_tax_free_automatically(
+        self, session: Session
+    ) -> None:
+        _seed_symmetric_totals(session)
+        (verdict,) = self._scan_betclic(session).verdicts
+        # Fresh ledger → allowance remains → x1.0: 0.5 x 2.10 - 1 = +0.05
+        assert verdict.edge == pytest.approx(0.05)
+        assert verdict.promo is not None
+        assert verdict.promo.tax_multiplier == Decimal("1")
+        assert verdict.verdict == "PLAY"
+
+    def test_spent_allowance_degrades_to_094(self, session: Session) -> None:
+        _seed_symmetric_totals(session)
+        self._spend_allowance(session)
+        (verdict,) = self._scan_betclic(session, price="2.30").verdicts
+        # §3 ust. 11 pkt 1: 0.5 x 2.30 x 0.94 - 1 = +0.081
+        assert verdict.edge == pytest.approx(0.081)
+        assert verdict.promo is not None
+        assert verdict.promo.tax_multiplier == Decimal("0.94")
+
+    def test_kill_switch_disables_the_auto_regime(self, session: Session) -> None:
+        _seed_symmetric_totals(session)
+        (verdict,) = self._scan_betclic(
+            session, disabled=frozenset({"betclic"})
+        ).verdicts
+        # promo off (§8): 0.5 x 2.10 x 0.88 - 1 = -0.076
+        assert verdict.edge == pytest.approx(-0.076)
+        assert verdict.promo is None
+
+    def test_explicit_regime_is_never_overwritten(self, session: Session) -> None:
+        # The operator explicitly declared the bare taxed regime (say the
+        # book refused the promo on this coupon) — auto must not "upgrade".
+        _seed_symmetric_totals(session)
+        (verdict,) = self._scan_betclic(
+            session, promo=PromoTerms(tax_multiplier=TAX_MULTIPLIER)
+        ).verdicts
+        assert verdict.edge == pytest.approx(-0.076)
+        assert verdict.promo is not None
+        assert verdict.promo.tax_multiplier == TAX_MULTIPLIER
+
+    def test_boost_composes_with_the_auto_regime(self, session: Session) -> None:
+        # A Betclic boost with no tax declaration: the boost is kept and the
+        # regime filled in — 0.5 x 2.40 x 1.0 - 1 = +0.20.
+        _seed_symmetric_totals(session)
+        (verdict,) = self._scan_betclic(
+            session, promo=PromoTerms(boosted_price=Decimal("2.40"))
+        ).verdicts
+        assert verdict.edge == pytest.approx(0.20)
+        assert verdict.promo is not None
+        assert verdict.promo.boosted_price == Decimal("2.40")
+        assert verdict.promo.tax_multiplier == Decimal("1")
 
 
 class TestEventResolution:

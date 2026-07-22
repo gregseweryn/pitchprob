@@ -76,16 +76,44 @@ def _seed_anchor(session: Session, *, observed_at: datetime = _OBS) -> None:
         )
 
 
-def _seed_feed(session: Session, *, over_price: str = "2.40") -> None:
+def _seed_feed(
+    session: Session,
+    *,
+    over_price: str = "2.40",
+    bookmaker: str = "Betclic PL",
+) -> None:
     """One Polish book on the feed, over 3.0 — a different event id and the
     same teams, matched on canonical names like the scanner does."""
     session.add(
         _tick(
             source="odds-api-io",
-            bookmaker="Betclic PL",
+            bookmaker=bookmaker,
             selection="over",
             price=over_price,
             event_id="feed1",
+        )
+    )
+
+
+def _seed_spent_allowance(session: Session) -> None:
+    """A settled 1,000 PLN of tax-free turnover at Betclic, a week back —
+    far enough that no exposure limit sees it, so only the allowance does."""
+    session.add(
+        Pick(
+            created_at=_NOW - timedelta(days=7),
+            home_team="Someone",
+            away_team="Else",
+            kickoff_utc=_NOW - timedelta(days=6),
+            market="1x2",
+            selection="home",
+            bookmaker="betclic",
+            stake_pln=Decimal("1000"),
+            price_quoted=Decimal("2.0"),
+            tax_free=True,
+            price_effective=Decimal("2.0"),
+            placed_at=_NOW - timedelta(days=7),
+            settled_at=_NOW - timedelta(days=6),
+            gross_return_pln=Decimal("2000"),
         )
     )
 
@@ -111,14 +139,53 @@ class TestDetection:
         assert alert.market == "ou"
         assert alert.selection == "over"
         assert alert.line == Decimal("3.0")
-        # 0.5 x (2.40 x 0.88) - 1 = 0.056
-        assert alert.edge == pytest.approx(0.056)
+        # Fresh ledger → the whole Bez Podatku allowance remains → Betclic
+        # prices tax-free automatically: 0.5 x 2.40 x 1.0 - 1 = 0.20 (the
+        # x0.88 reading understated this by 12pp of payout).
+        assert alert.edge == pytest.approx(0.20)
+        assert alert.price_effective == Decimal("2.40")
         assert alert.anchor_price == Decimal("1.89")
         assert alert.suggested_stake_pln == Decimal("5")
 
+    def test_spent_allowance_degrades_betclic_to_094(self, session: Session) -> None:
+        _seed_anchor(session)
+        _seed_feed(session)
+        _seed_spent_allowance(session)
+        session.flush()
+        alerts = find_alerts(session, now=_NOW, min_edge=0.02)
+        assert len(alerts) == 1
+        # Limit spent → §3 ust. 11 pkt 1: singles pay x0.94.
+        # 0.5 x 2.40 x 0.94 - 1 = 0.128
+        assert alerts[0].edge == pytest.approx(0.128)
+        assert alerts[0].price_effective == Decimal("2.2560")
+
+    def test_kill_switch_prices_betclic_bare_taxed(self, session: Session) -> None:
+        _seed_anchor(session)
+        _seed_feed(session)
+        session.flush()
+        alerts = find_alerts(
+            session,
+            now=_NOW,
+            min_edge=0.02,
+            disabled_promos=frozenset({"betclic"}),
+        )
+        assert len(alerts) == 1
+        # §8 kill switch: promo off → 0.5 x 2.40 x 0.88 - 1 = 0.056
+        assert alerts[0].edge == pytest.approx(0.056)
+
+    def test_unregistered_book_stays_bare_taxed(self, session: Session) -> None:
+        _seed_anchor(session)
+        _seed_feed(session, bookmaker="STS PL")
+        session.flush()
+        alerts = find_alerts(session, now=_NOW, min_edge=0.02)
+        assert len(alerts) == 1
+        # No promo in the registry for STS → conservative x0.88.
+        assert alerts[0].edge == pytest.approx(0.056)
+
     def test_below_threshold_is_silent(self, session: Session) -> None:
         _seed_anchor(session)
-        _seed_feed(session, over_price="2.30")  # 0.5 x 2.30 x 0.88 - 1 = 0.012
+        # Tax-free Betclic: 0.5 x 2.02 - 1 = 0.01 < 0.02
+        _seed_feed(session, over_price="2.02")
         session.flush()
         assert find_alerts(session, now=_NOW, min_edge=0.02) == []
 
@@ -175,6 +242,9 @@ class TestDelivery:
         assert len(notifier.messages) == 1
         assert "Betclic PL" in notifier.messages[0]
         assert "LEAD" in notifier.messages[0]  # UNVERIFIED renders as a lead
+        # The auto-applied regime is named in the payload, with the order to
+        # confirm it on the coupon — the regime is an assumption until seen.
+        assert "Bez Podatku" in notifier.messages[0]
         assert (
             session.execute(select(func.count()).select_from(SentAlert)).scalar_one()
             == 1

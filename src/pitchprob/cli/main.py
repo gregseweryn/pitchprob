@@ -860,8 +860,11 @@ def _effective_display(verdict: Any) -> str:
         else promo.boosted_price
     )
     tax_free = promo is not None and promo.tax_free
+    multiplier = promo.tax_multiplier if promo is not None else None
     return str(
-        effective_price(base, tax_free=tax_free).quantize(Decimal("0.01"))
+        effective_price(base, tax_free=tax_free, multiplier=multiplier).quantize(
+            Decimal("0.01")
+        )
     )
 
 
@@ -922,6 +925,7 @@ def scan_command(
     from decimal import Decimal
 
     from pitchprob.services.scanner import feed_quotes
+    from pitchprob.betting.promos import parse_disabled
     from pitchprob.services.scanner import scan as run_scan
 
     configure_logging(get_settings().log_level)
@@ -929,6 +933,8 @@ def scan_command(
         raise typer.BadParameter(
             "at least one --quote book:price is required (or --feed)"
         )
+    # §8 kill switch: books whose promo the env has switched off price bare.
+    disabled_promos = parse_disabled(get_settings().disabled_promos)
     quotes = _build_quotes(quote or [], tax_free or [], boost or [], haircut or [])
     with session_scope() as session:
         try:
@@ -963,6 +969,7 @@ def scan_command(
                 quotes=quotes,
                 model_probability=model_prob,
                 min_edge=min_edge,
+                disabled_promos=disabled_promos,
             )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -1879,6 +1886,7 @@ def watch_command(
     """
     from time import sleep
 
+    from pitchprob.betting.promos import parse_disabled
     from pitchprob.services.alerts import discover_chat_ids, format_test_alert
     from pitchprob.services.watch import run_watch
 
@@ -1929,6 +1937,7 @@ def watch_command(
                 window=window,
                 markets=markets,
                 books=books,
+                disabled_promos=parse_disabled(settings.disabled_promos),
             )
         typer.echo(
             f"[{datetime.now(tz=UTC):%Y-%m-%d %H:%M:%S} UTC] "
