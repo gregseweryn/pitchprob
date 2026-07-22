@@ -524,6 +524,28 @@ the runbook's procedure turns each into a tested one-line addition to
 `_ODDS_API_OVERRIDES` — the map grows from real unmatched reports only,
 never speculatively.
 
+#### The speaking loop (ADR 0016)
+
+Everything above is pull — you ask, it answers. `pitchprob watch` is the
+push half: an always-on loop that scans the upcoming fixtures the tape
+anchors, pulls Polish-book quotes from the odds-api.io feed, and sends a
+Telegram alert the moment a fresh lead clears the edge threshold **and** fits
+the risk limits — and stays silent otherwise, which is most of the time.
+
+```
+$ uv run pitchprob watch --once --dry-run
+🟢 GRAJ
+Arsenal vs Everton
+...
+[2026-08-20 18:00:00 UTC] scanned 1 events · sent 1 · 0 already announced
+```
+
+The sharp price still decides (the loop only reads `scanner.scan`); feed
+prices are unvalidated, so they push as `UNVERIFIED` leads — a prompt to
+check the book's own screen — never an auto-`PLAY` (ADR 0014); each standing
+lead is announced once. It finds nothing until the odds-api.io key is
+attached, which is the honest answer, not a fault.
+
 #### Dashboard: scanner and ledger views
 
 The audit's Etap 7 asked for the two surfaces the dashboard was missing.
@@ -636,7 +658,7 @@ src/pitchprob/
 
 Postgres 16 is the system of record (long-format odds/predictions, ADR 0003) with
 Alembic migrations; the code is dialect-portable and runs unmodified on SQLite for
-zero-dependency development. See `docs/adr/` for the 15 architecture decision
+zero-dependency development. See `docs/adr/` for the 16 architecture decision
 records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing
