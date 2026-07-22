@@ -256,10 +256,18 @@ overflowed the viewport horizontally on **every** page at 390px (pre-
 existing; five nav items made it certain — it now wraps), and repeated
 quote rows lost their labels when the grid stacked on mobile.
 
-**Next task — two open items:** (a) rerun the M5 absence A/B now that A1 is
-fixed; the published null is unsupported in either direction and it gates a
-spend decision; (b) extend `_ODDS_API_OVERRIDES` in `data/normalize.py`
-from the first real "unmatched" reports once the season starts.
+**M5 rerun done (2026-07-22).** The absence A/B was re-run and registered with
+the A1 fix live (GBM E0 2023-08→2025-06, 760 fixtures, 5000 resamples): every
+primary endpoint null (log-loss Δ−0.0011 p=0.71, RPS p=0.99, ROI p=0.31,
+exec-CLV p=0.47), matching the published table. The null is now backed by a
+stored run, not a description; the spend gate (paid player data / LLM news)
+stays closed on measured evidence. A1 fully closed.
+
+**Next task:** extend `_ODDS_API_OVERRIDES` in `data/normalize.py` from the
+first real "unmatched" reports once the season starts. Open research lanes
+(evidence-gated, expected null): CLV-conditioned training (model =
+f(sharp-fair, residual) — the only modelling path with a shot at +CLV),
+non-transitivity / bivariate-Poisson / TabPFN ablations.
 
 **User context:** Polish operator — PL-licensed books only, communicates in
 Polish. Docs, code, tests and API verdict *values* stay English; the

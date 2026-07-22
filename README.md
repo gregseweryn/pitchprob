@@ -216,6 +216,14 @@ is exactly the fingerprint of the fix — and the verdict still holds. The
 correction strengthens the null rather than weakening it: the feature now had
 its full opportunity to matter, at train *and* serve time, and did not.
 
+**Rerun executed and registered (2026-07-22).** With the channel wired end to
+end, the A/B was run and stored (paired block bootstrap, 760 fixtures, 5000
+resamples): log-loss Δ −0.0011 (p=0.71), RPS Δ −0.0000 (p=0.99), close-clock
+ROI Δ −0.027 (p=0.31), exec-CLV Δ +0.0003 (p=0.47) — every primary endpoint
+null, matching the table above. The verdict is now backed by a stored,
+reproducible registry run, not only a description; the spend gate it guards
+(paid player data, an LLM news layer) stays closed on measured evidence.
+
 Reproduce with: `uv run pitchprob experiment compare --league E0
 --start 2023-08-01 --end 2025-06-30 --model gbm --refit-days 28
 --vs ablate=absences` (add `--at open` for the syndicate-clock row).
