@@ -329,6 +329,7 @@ def _pick_out(pick: Pick) -> PickOut:
         price_quoted=pick.price_quoted,
         price_effective=pick.price_effective,
         tax_free=pick.tax_free,
+        tax_multiplier=pick.tax_multiplier,
         price_sharp=pick.price_sharp,
         gross_return_pln=pick.gross_return_pln,
         settled_at=pick.settled_at,
@@ -372,6 +373,7 @@ def create_pick(request: PickRequest, db: Session = Depends(get_db)) -> PickOut:
             event_id=request.event_id,
             notes=request.notes,
             override_risk=request.override_risk,
+            disabled_promos=parse_disabled(get_settings().disabled_promos),
         )
     except RiskRefusal as exc:
         # Checked before ValueError: RiskRefusal subclasses it, and the two

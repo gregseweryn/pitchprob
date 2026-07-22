@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from pitchprob.betting.effective import TAX_MULTIPLIER
 from pitchprob.betting.risk import RiskLimits
 from pitchprob.data.orm import Base, League, Match, OddsTick, Pick, Season, Team
 from pitchprob.services.ledger import (
@@ -173,6 +174,64 @@ class TestLogPick:
         # taxed picks at the same book do not consume the allowance
         _log_over_pick(session, stake_pln=Decimal("5"), tax_free=False)
         assert tax_free_allowance(session, "betclic").used == Decimal("7")
+
+    def test_auto_regime_derives_tax_free_from_the_allowance(
+        self, session: Session
+    ) -> None:
+        # No declaration (tax_free=None): the promo registry + a fresh
+        # allowance at Betclic → the whole bet pays x1.0.
+        pick = _log_over_pick(session, tax_free=None)
+        assert pick.tax_free is True
+        assert pick.tax_multiplier == Decimal("1")
+        assert pick.price_effective == Decimal("2.10")
+
+    def test_auto_regime_degrades_to_094_past_the_limit(
+        self, session: Session
+    ) -> None:
+        _log_over_pick(session, stake_pln=Decimal("1000"))
+        pick = _log_over_pick(
+            session, tax_free=None, stake_pln=Decimal("4")
+        )
+        # §3 ust. 11 pkt 1: 2.10 x 0.94 = 1.9740 exactly
+        assert pick.tax_free is False
+        assert pick.tax_multiplier == Decimal("0.94")
+        assert pick.price_effective == Decimal("1.9740")
+
+    def test_auto_regime_at_an_unregistered_book_is_bare_taxed(
+        self, session: Session
+    ) -> None:
+        pick = _log_over_pick(
+            session, tax_free=None, bookmaker="sts", event_id=None
+        )
+        assert pick.tax_free is False
+        assert pick.tax_multiplier == TAX_MULTIPLIER
+        assert pick.price_effective == Decimal("1.8480")
+
+    def test_kill_switch_disables_the_auto_regime(
+        self, session: Session
+    ) -> None:
+        pick = _log_over_pick(
+            session, tax_free=None, disabled_promos=frozenset({"betclic"})
+        )
+        assert pick.tax_free is False
+        assert pick.tax_multiplier == TAX_MULTIPLIER
+
+    def test_explicit_taxed_declaration_wins_over_the_registry(
+        self, session: Session
+    ) -> None:
+        # The operator saw a taxed coupon at Betclic (excluded per §4, say):
+        # the declaration wins, auto must not "upgrade" it.
+        pick = _log_over_pick(session, tax_free=False)
+        assert pick.tax_free is False
+        assert pick.tax_multiplier == TAX_MULTIPLIER
+        assert pick.price_effective == Decimal("1.8480")
+
+    def test_forced_tax_free_past_the_limit_names_the_reduced_regime(
+        self, session: Session
+    ) -> None:
+        _log_over_pick(session, stake_pln=Decimal("1000"))
+        with pytest.raises(ValueError, match=r"0\.94"):
+            _log_over_pick(session, stake_pln=Decimal("4"))
 
     def test_tax_free_straddling_the_limit_qualifies_in_full(
         self, session: Session

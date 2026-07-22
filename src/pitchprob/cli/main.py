@@ -924,8 +924,8 @@ def scan_command(
     """
     from decimal import Decimal
 
-    from pitchprob.services.scanner import feed_quotes
     from pitchprob.betting.promos import parse_disabled
+    from pitchprob.services.scanner import feed_quotes
     from pitchprob.services.scanner import scan as run_scan
 
     configure_logging(get_settings().log_level)
@@ -1040,8 +1040,15 @@ def pick_log(
     ] = None,
     line: Annotated[str | None, typer.Option(help="Line for ou/ah")] = None,
     tax_free: Annotated[
-        bool, typer.Option("--tax-free", help="Executed under a tax-free promo "
-                                              "(Betclic 'Gra bez podatku')")
+        bool, typer.Option("--tax-free", help="Force the x1.0 regime (the "
+                                              "coupon showed tax-free). "
+                                              "Default: the regime derives "
+                                              "itself from the promo registry "
+                                              "and the allowance state")
+    ] = False,
+    taxed: Annotated[
+        bool, typer.Option("--taxed", help="Force the bare x0.88 regime (the "
+                                           "coupon showed full tax)")
     ] = False,
     placed_at: Annotated[
         str | None, typer.Option(help="Bet execution time, ISO (default: now)")
@@ -1059,10 +1066,17 @@ def pick_log(
     """Log one executed real-money bet; the sharp anchor fills from the tape."""
     from decimal import Decimal
 
+    from pitchprob.betting.promos import active_promo, parse_disabled
     from pitchprob.services.ledger import log_pick, tax_free_allowance
     from pitchprob.services.tape import find_events
 
     configure_logging(get_settings().log_level)
+    if tax_free and taxed:
+        raise typer.BadParameter("--tax-free and --taxed contradict each other")
+    # None = derive the regime from the registry + allowance (ADR 0017);
+    # an explicit flag records what the operator saw on the coupon.
+    tax_free_arg: bool | None = True if tax_free else (False if taxed else None)
+    disabled = parse_disabled(get_settings().disabled_promos)
     now = datetime.now(tz=UTC)
     event_id: str | None
     with session_scope() as session:
@@ -1102,13 +1116,14 @@ def pick_log(
                 bookmaker=book,
                 stake_pln=Decimal(stake),
                 price_quoted=Decimal(price),
-                tax_free=tax_free,
+                tax_free=tax_free_arg,
                 placed_at=(
                     _parse_utc_datetime(placed_at) if placed_at else None
                 ),
                 event_id=event_id,
                 notes=notes,
                 override_risk=override_risk,
+                disabled_promos=disabled,
             )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -1139,7 +1154,12 @@ def pick_log(
                 f"warning: stake {pick.stake_pln} PLN is outside the 2-5 PLN "
                 "program range (Phase 3 parameters)"
             )
-        if tax_free:
+        regime = "auto" if tax_free_arg is None else "forced"
+        typer.echo(
+            f"tax regime: x{pick.tax_multiplier} ({regime}) — confirm it on "
+            "the coupon; the book's screen decides"
+        )
+        if active_promo(book, disabled=disabled) is not None:
             allowance = tax_free_allowance(session, book)
             typer.echo(
                 f"tax-free allowance remaining: {allowance.remaining} PLN "
@@ -1264,7 +1284,7 @@ def pick_list() -> None:
                 f"{pick.home_team} vs {pick.away_team} | "
                 f"{pick.market}{line_label} {pick.selection} @ "
                 f"{pick.bookmaker} {_price_str(pick.price_quoted)}"
-                f"{' (tax-free)' if pick.tax_free else ''} "
+                f" (x{pick.tax_multiplier}) "
                 f"stake {pick.stake_pln} | return {returned} | "
                 f"clv exec {_signed_pct(pick.clv_exec)} "
                 f"sharp {_signed_pct(pick.clv_sharp)}"

@@ -71,7 +71,7 @@ uv run pitchprob predict --league E0 --home "Manchester City" --away "Chelsea" \
     --odds 1.55,4.4,5.9
 uv run pitchprob backtest --league E0 --start 2021-08-01
 make serve                      # FastAPI on :8000, OpenAPI docs at /docs
-make check                      # ruff + mypy --strict + 676 tests
+make check                      # ruff + mypy --strict + 734 tests
 ```
 
 Example output (real run, July 2026):
@@ -671,7 +671,7 @@ records and `docs/superpowers/specs/` for the approved milestone design.
 
 ## Testing
 
-676 tests: hand-computed reference values for every formula, hypothesis property tests
+734 tests: hand-computed reference values for every formula, hypothesis property tests
 (market partitions sum to 1, quarter-line AH EV ≡ mean of adjacent half lines, Shin
 books renormalize, realized settlement ≡ the probability-side markets module
 cell-for-cell, block-bootstrap scale equivariance), analytic-vs-numeric gradient

@@ -42,7 +42,10 @@ export function LogPickForm() {
   const [bookmaker, setBookmaker] = useState("");
   const [stake, setStake] = useState("5");
   const [price, setPrice] = useState("");
-  const [taxFree, setTaxFree] = useState(false);
+  // "auto" = the API derives the regime from the promo registry and the
+  // Bez Podatku allowance (ADR 0017); the forced values record what the
+  // operator saw on the coupon.
+  const [taxRegime, setTaxRegime] = useState<"auto" | "free" | "taxed">("auto");
   const [override, setOverride] = useState(false);
   const [refusal, setRefusal] = useState<PickRefused | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +91,7 @@ export function LogPickForm() {
         bookmaker: bookmaker.trim(),
         stake_pln: stake.trim(),
         price_quoted: price.trim(),
-        tax_free: taxFree,
+        tax_free: taxRegime === "auto" ? null : taxRegime === "free",
         event_id: fixture.event_id,
         override_risk: override,
       });
@@ -186,15 +189,18 @@ export function LogPickForm() {
               inputMode="decimal"
             />
           </Field>
-          <label className="flex h-9 items-center gap-2 text-sm sm:mt-[1.375rem]">
-            <input
-              type="checkbox"
-              checked={taxFree}
-              onChange={(event) => setTaxFree(event.target.checked)}
-              className="size-4 accent-[var(--gold-ink)]"
-            />
-            bez podatku
-          </label>
+          <Field label="Reżim podatkowy">
+            <Select
+              value={taxRegime}
+              onChange={(event) =>
+                setTaxRegime(event.target.value as "auto" | "free" | "taxed")
+              }
+            >
+              <option value="auto">auto (ze stanu limitu)</option>
+              <option value="free">wymuś bez podatku (×1,00)</option>
+              <option value="taxed">wymuś z podatkiem (×0,88)</option>
+            </Select>
+          </Field>
         </div>
 
         {refusal ? (

@@ -9,8 +9,9 @@ the two-label decomposition per bet:
   sharp line move for or against the bet after placement? ``price_sharp``
   is the Pinnacle quote at bet time, auto-filled from the tape.
 - ``clv_exec``   = price_effective x Shin(close) - 1 — the PLN-real number:
-  executed price after the 12% turnover tax (x0.88) or a tax-free promo
-  (x1.0). ``clv_exec - clv_sharp`` is the venue/shopping component — under
+  executed price under the recorded tax regime (``tax_multiplier``: x1.0
+  tax-free, x0.94 past the Betclic limit, x0.88 bare tax — ADR 0017).
+  ``clv_exec - clv_sharp`` is the venue/shopping component — under
   the Phase 0-2a verdicts (no timing edge) it is the only place value can
   live, which is exactly what the decomposition makes visible.
 
@@ -31,10 +32,11 @@ from sqlalchemy.orm import Session
 
 from pitchprob.betting.effective import (
     BETCLIC_TAX_FREE_LIMIT,
+    TAX_MULTIPLIER,
     TaxFreeAllowance,
     effective_price,
 )
-from pitchprob.betting.promos import canonical_bookmaker
+from pitchprob.betting.promos import active_promo, auto_terms, canonical_bookmaker
 from pitchprob.betting.risk import (
     DEFAULT_BANKROLL_PLN,
     DEFAULT_LIMITS,
@@ -80,6 +82,12 @@ LEDGER_CAVEATS: tuple[str, ...] = (
     "o kilka godzin za wczesny; każdy zakład niesie ten znacznik czasu.",
     "Stawki to 2-5 zł przy umownym banku 500 zł. To sezon pomiarowy: wynikiem "
     "jest dowód na temat CLV, nie przychód.",
+    "Reżim podatkowy zapisuje się automatycznie ze stanu limitu \"Bez "
+    "Podatku\" (x1,0 w ramach limitu, x0,94 po nim dla singli, x0,88 bez "
+    "promocji) i liczy się wyłącznie z zakładów w tym rejestrze — kupon "
+    "postawiony poza nim rozjeżdża stan limitu. Rozstrzygający jest reżim "
+    "widoczny na kuponie u bukmachera; ofertę można odwołać z 24-godzinnym "
+    "wyprzedzeniem (§8 regulaminu).",
 )
 
 
@@ -261,19 +269,25 @@ def log_pick(
     stake_pln: Decimal,
     price_quoted: Decimal,
     line: Decimal | None = None,
-    tax_free: bool = False,
+    tax_free: bool | None = None,
     placed_at: datetime | None = None,
     event_id: str | None = None,
     notes: str | None = None,
     limits: RiskLimits = DEFAULT_LIMITS,
     override_risk: bool = False,
+    disabled_promos: frozenset[str] = frozenset(),
 ) -> Pick:
     """Record one executed bet; auto-fill the sharp anchor from the tape.
 
-    A tax-free pick must fit the bookmaker's remaining tax-free allowance in
-    full (see ``TaxFreeAllowance``) — beyond it Betclic's promo demands a
-    >=50%-odds AKO, which a single cannot meet, so the ledger refuses rather
-    than silently mispricing the payout.
+    The tax regime records itself (ADR 0017): with ``tax_free=None`` the
+    promo registry plus the allowance state derive the multiplier — x1.0
+    while any Bez Podatku allowance remains (§3 ust. 4: a straddling stake
+    qualifies in full), x0.94 past the limit for singles (§3 ust. 11 pkt 1),
+    x0.88 at a book with no promo or one killed via ``disabled_promos``.
+    The regulamin applies the promo to every qualifying bet automatically,
+    so auto *is* the faithful record. An explicit ``tax_free`` wins — the
+    operator saw the coupon, the router did not — and forcing ``True`` past
+    a spent limit is refused rather than silently mispricing the payout.
 
     The Phase 3 risk layer (ADR 0015) gates the write: exposure limits and
     the drawdown circuit breaker raise ``RiskRefusal`` and no row is
@@ -282,14 +296,31 @@ def log_pick(
     overrides instead of the operator having to remember them.
     """
     _validate_bet(market, selection, line, stake_pln, price_quoted)
-    if tax_free:
+    if tax_free is None:
+        promo = active_promo(bookmaker, disabled=disabled_promos)
+        if promo is None:
+            multiplier = TAX_MULTIPLIER
+        else:
+            terms = auto_terms(
+                promo,
+                tax_free_allowance(
+                    session, promo.book, limit=promo.tax_free_limit
+                ),
+            )
+            assert terms.tax_multiplier is not None  # auto_terms always sets it
+            multiplier = terms.tax_multiplier
+    elif tax_free:
         allowance = tax_free_allowance(session, bookmaker)
         if not allowance.covers(stake_pln):
             raise ValueError(
-                f"stake {stake_pln} PLN exceeds the remaining tax-free "
-                f"allowance {allowance.remaining} PLN at {bookmaker}; "
-                "log the pick as taxed instead"
+                f"the tax-free allowance at {bookmaker} is spent "
+                f"(limit {allowance.limit} PLN); past it Betclic singles pay "
+                "x0.94 (§3 ust. 11 pkt 1) — log the pick without --tax-free "
+                "and the regime derives itself"
             )
+        multiplier = Decimal("1")
+    else:
+        multiplier = TAX_MULTIPLIER
     when = placed_at if placed_at is not None else datetime.now(tz=UTC)
     refusal = _risk_check(
         session,
@@ -327,8 +358,9 @@ def log_pick(
         bookmaker=bookmaker,
         stake_pln=stake_pln,
         price_quoted=price_quoted,
-        tax_free=tax_free,
-        price_effective=effective_price(price_quoted, tax_free=tax_free),
+        tax_free=multiplier == Decimal("1"),
+        tax_multiplier=multiplier,
+        price_effective=effective_price(price_quoted, multiplier=multiplier),
         placed_at=when,
         price_sharp=price_sharp,
         sharp_observed_at=sharp_observed_at,

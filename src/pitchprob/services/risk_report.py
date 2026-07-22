@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pitchprob.betting.promos import PROMOS
 from pitchprob.betting.risk import DEFAULT_LIMITS, RiskLimits, breaker_tripped
 from pitchprob.data.orm import Pick
 from pitchprob.evaluation.significance import block_bootstrap_mean, week_block_labels
@@ -37,9 +38,9 @@ from pitchprob.services.tape import as_utc
 #: statement about uncertainty.
 MIN_BLOCKS_FOR_CI = 4
 
-#: Books whose tax-free allowance is worth tracking (Betclic's "Gra bez
-#: podatku 2.0" is the one the program actually uses).
-TRACKED_TAX_FREE_BOOKS = ("betclic",)
+#: Books whose tax-free allowance is worth tracking: exactly the ones the
+#: promo registry knows (ADR 0017 — Betclic's "Bez Podatku 2.0" today).
+TRACKED_TAX_FREE_BOOKS = tuple(promo.book for promo in PROMOS)
 
 
 @dataclass(slots=True)

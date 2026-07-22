@@ -146,8 +146,12 @@ function VerdictTable({ result }: { result: ScanResponse }) {
               </td>
               <td className="py-2">
                 {verdict.bookmaker}
-                {verdict.tax_free ? (
+                {Number(verdict.tax_multiplier) === 1 ? (
                   <span className="ml-1.5 text-xs text-ink-muted">bez podatku</span>
+                ) : Number(verdict.tax_multiplier) !== 0.88 ? (
+                  <span className="ml-1.5 text-xs text-ink-muted">
+                    po limicie ×{verdict.tax_multiplier}
+                  </span>
                 ) : null}
                 {verdict.boosted ? (
                   <span className="ml-1.5 text-xs text-ink-muted">boost</span>

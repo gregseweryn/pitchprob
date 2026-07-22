@@ -132,12 +132,12 @@ def format_play_alert(alert: Alert) -> str:
     ]
     if alert.tax_multiplier is not None and alert.tax_multiplier == Decimal("1"):
         lines.append(
-            "reżim podatkowy: ×1,00 — Bez Podatku (auto ze stanu limitu; "
+            "reżim podatkowy: x1,00 — Bez Podatku (auto ze stanu limitu; "
             "potwierdź na kuponie)"
         )
     elif alert.tax_multiplier is not None:
         lines.append(
-            f"reżim podatkowy: ×{alert.tax_multiplier} — po limicie Bez "
+            f"reżim podatkowy: x{alert.tax_multiplier} — po limicie Bez "
             "Podatku (auto ze stanu limitu; potwierdź na kuponie)"
         )
     if alert.promo_value is not None:

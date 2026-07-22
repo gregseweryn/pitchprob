@@ -166,6 +166,8 @@ class PickOut(BaseModel):
     price_quoted: Decimal
     price_effective: Decimal
     tax_free: bool
+    #: The payout regime behind price_effective (1.00/0.94/0.88 — ADR 0017).
+    tax_multiplier: Decimal
     price_sharp: Decimal | None
     gross_return_pln: Decimal | None
     settled_at: datetime | None
@@ -196,7 +198,9 @@ class PickRequest(BaseModel):
     stake_pln: Decimal = Field(gt=0)
     price_quoted: Decimal = Field(gt=1)
     line: Decimal | None = None
-    tax_free: bool = False
+    #: None = derive the regime from the promo registry + allowance state
+    #: (ADR 0017); an explicit value records what the coupon showed.
+    tax_free: bool | None = None
     event_id: str | None = None
     notes: str | None = Field(default=None, max_length=256)
     override_risk: bool = False

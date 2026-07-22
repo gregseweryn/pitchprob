@@ -211,7 +211,8 @@ class Pick(Base):
     Teams carry raw tape naming (same rule as ``odds_ticks``: canonical
     resolution happens at analysis time). Prices: ``price_quoted`` is what
     the Polish book displayed; ``price_effective`` is what it actually pays
-    per unit staked (x0.88 taxed, x1.0 tax-free) — settlement and
+    per unit staked (``tax_multiplier``: x1.0 tax-free, x0.94 past the
+    Betclic limit, x0.88 bare tax — ADR 0017) — settlement and
     ``clv_exec`` run on the effective price because the ledger measures PLN
     reality, not menu prices. ``price_sharp`` is the Pinnacle quote for the
     same selection at bet time (from the tape), so every pick decomposes as
@@ -235,6 +236,12 @@ class Pick(Base):
     stake_pln: Mapped[Decimal] = mapped_column(Numeric(8, 2))
     price_quoted: Mapped[Decimal] = mapped_column(Numeric(8, 3))
     tax_free: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: The exact payout regime behind price_effective: 1.00 tax-free, 0.94
+    #: past the Betclic limit, 0.88 bare tax (ADR 0017). tax_free is the
+    #: compatible boolean view of the same fact (= multiplier 1.00).
+    tax_multiplier: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2), default=Decimal("0.88"), server_default="0.88"
+    )
     price_effective: Mapped[Decimal] = mapped_column(Numeric(9, 5))
     placed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

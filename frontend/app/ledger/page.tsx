@@ -223,8 +223,12 @@ function PicksTable({ picks }: { picks: LedgerResponse["picks"] }) {
               </td>
               <td className="py-2">
                 {pick.bookmaker}
-                {pick.tax_free ? (
+                {Number(pick.tax_multiplier) === 1 ? (
                   <span className="ml-1.5 text-xs text-ink-muted">bez podatku</span>
+                ) : Number(pick.tax_multiplier) !== 0.88 ? (
+                  <span className="ml-1.5 text-xs text-ink-muted">
+                    po limicie ×{pick.tax_multiplier}
+                  </span>
                 ) : null}
               </td>
               <td className="num py-2 text-right">

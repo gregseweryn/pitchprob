@@ -109,6 +109,8 @@ export type ScanVerdict = {
   price_quoted: Money;
   price_effective: Money;
   tax_free: boolean;
+  /** Payout regime the router applied: 1.00 / 0.94 / 0.88 (ADR 0017). */
+  tax_multiplier: Money;
   boosted: boolean;
   promo_value: number | null;
   edge: number | null;
@@ -151,6 +153,8 @@ export type Pick = {
   price_quoted: Money;
   price_effective: Money;
   tax_free: boolean;
+  /** Payout regime behind price_effective: 1.00 / 0.94 / 0.88 (ADR 0017). */
+  tax_multiplier: Money;
   price_sharp: Money | null;
   gross_return_pln: Money | null;
   settled_at: string | null;
@@ -306,7 +310,8 @@ export type PickRequest = {
   stake_pln: Money;
   price_quoted: Money;
   line?: Money | null;
-  tax_free?: boolean;
+  /** null/omitted = the API derives the regime automatically (ADR 0017). */
+  tax_free?: boolean | null;
   event_id?: string | null;
   notes?: string | null;
   override_risk?: boolean;
