@@ -8,7 +8,7 @@ import contextlib
 import json as json_lib
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import httpx
 import typer
@@ -44,6 +44,9 @@ from pitchprob.services.recorder import (
     record_snapshot,
     record_snapshot_to_csv,
 )
+
+if TYPE_CHECKING:
+    from pitchprob.services.alerts import Notifier
 
 app = typer.Typer(
     name="pitchprob",
@@ -1732,6 +1735,17 @@ def risk_report_command(
     out: Annotated[
         str | None, typer.Option(help="Also write the markdown report here")
     ] = None,
+    notify: Annotated[
+        bool,
+        typer.Option(
+            "--notify",
+            help="Also push the report to Telegram (stdout if no token set)",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(help="With --notify, print instead of pushing to Telegram"),
+    ] = False,
 ) -> None:
     """The weekly report: what the tape says about the bets you placed.
 
@@ -1757,6 +1771,13 @@ def risk_report_command(
         Path(out).write_text(result.report + "\n", encoding="utf-8")
         typer.echo(f"report written to {out}")
     typer.echo(result.report)
+    if notify:
+        try:
+            _build_notifier(dry_run=dry_run).send(result.report)
+        except RuntimeError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1) from None
+        typer.echo("report pushed")
 
 
 @app.command("status")
@@ -1782,6 +1803,26 @@ def status_command() -> None:
     if not result.all_ok:
         raise typer.Exit(code=1)
     typer.echo("all checks passed — the data is current enough to act on")
+
+
+def _build_notifier(*, dry_run: bool) -> "Notifier":
+    """The notifier shared by `watch` and `risk report --notify`.
+
+    Telegram when both credentials are set and not a dry run; stdout
+    otherwise, with a one-line notice so a missing token is never silent.
+    """
+    from pitchprob.services.alerts import StdoutNotifier, TelegramNotifier
+
+    settings = get_settings()
+    if dry_run:
+        return StdoutNotifier()
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        return TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+    typer.echo(
+        "no PITCHPROB_TELEGRAM_BOT_TOKEN/CHAT_ID set — printing to stdout "
+        "(set both to push to Telegram, or pass --dry-run to silence this notice)"
+    )
+    return StdoutNotifier()
 
 
 @app.command("watch")
@@ -1811,6 +1852,22 @@ def watch_command(
         bool,
         typer.Option(help="Print alerts to stdout instead of pushing to Telegram"),
     ] = False,
+    self_test: Annotated[
+        bool,
+        typer.Option(
+            "--self-test",
+            help="Send one clearly-marked test alert and exit — confirms "
+            "delivery works before any real signal exists",
+        ),
+    ] = False,
+    discover_chat: Annotated[
+        bool,
+        typer.Option(
+            "--discover-chat",
+            help="Print the numeric chat ids that have messaged the bot, then "
+            "exit — paste one into PITCHPROB_TELEGRAM_CHAT_ID",
+        ),
+    ] = False,
 ) -> None:
     """The speaking loop (ADR 0016): scan upcoming PL quotes, push GRAJ/LEAD.
 
@@ -1822,30 +1879,42 @@ def watch_command(
     """
     from time import sleep
 
-    from pitchprob.services.alerts import (
-        Notifier,
-        StdoutNotifier,
-        TelegramNotifier,
-    )
+    from pitchprob.services.alerts import discover_chat_ids, format_test_alert
     from pitchprob.services.watch import run_watch
 
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    notifier: Notifier
-    if dry_run:
-        notifier = StdoutNotifier()
-    elif settings.telegram_bot_token and settings.telegram_chat_id:
-        notifier = TelegramNotifier(
-            settings.telegram_bot_token, settings.telegram_chat_id
-        )
-    else:
-        typer.echo(
-            "no PITCHPROB_TELEGRAM_BOT_TOKEN/CHAT_ID set — printing alerts to "
-            "stdout (set both to push to Telegram, or pass --dry-run to silence "
-            "this notice)"
-        )
-        notifier = StdoutNotifier()
+    if discover_chat:
+        if not settings.telegram_bot_token:
+            typer.echo("PITCHPROB_TELEGRAM_BOT_TOKEN is not set (see .env)")
+            raise typer.Exit(code=1)
+        chats = discover_chat_ids(settings.telegram_bot_token)
+        if not chats:
+            typer.echo(
+                "no chats have messaged the bot yet — open Telegram, send the "
+                "bot any message, then re-run. (chat_id must be numeric, not "
+                "the bot's @username)"
+            )
+            raise typer.Exit(code=1)
+        for chat_id, label in chats:
+            typer.echo(f"chat_id={chat_id}  ({label})")
+        return
+
+    notifier = _build_notifier(dry_run=dry_run)
+
+    if self_test:
+        try:
+            notifier.send(format_test_alert())
+        except RuntimeError as exc:
+            typer.echo(str(exc))
+            typer.echo(
+                "hint: if this is a 403/'chat not found', your chat_id is wrong "
+                "— run `pitchprob watch --discover-chat` for the numeric id"
+            )
+            raise typer.Exit(code=1) from None
+        typer.echo("test alert sent")
+        return
 
     books = frozenset(book) if book else None
     markets = frozenset(market) if market else None

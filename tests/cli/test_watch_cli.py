@@ -91,3 +91,19 @@ class TestWatchCommand:
         assert result.exit_code == 0, result.output
         assert "Betclic PL" not in result.output
         assert "sent 0" in result.output
+
+    def test_self_test_sends_a_marked_test_alert(self, cli_env) -> None:
+        result = runner.invoke(cli_main.app, ["watch", "--self-test", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "TEST" in result.output
+        assert "nie jest sygnał" in result.output.lower()
+        assert "test alert sent" in result.output
+
+
+class TestRiskReportNotify:
+    def test_notify_dry_run_pushes_the_report(self, cli_env) -> None:
+        result = runner.invoke(
+            cli_main.app, ["risk", "report", "--notify", "--dry-run"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "report pushed" in result.output
