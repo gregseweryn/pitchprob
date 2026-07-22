@@ -283,6 +283,188 @@ def record_corners_to_csv(
     return summary, _write_csv(ticks, directory, when)
 
 
+class _IoClient(Protocol):
+    def selected_bookmakers(self) -> object: ...
+
+    def list_events(
+        self, *, sport: str = ..., league: str | None = ...
+    ) -> list[dict[str, object]]: ...
+
+    def fetch_odds(self, event_id: str, *, bookmakers: list[str]) -> object: ...
+
+
+def _anchor_fixtures(
+    session: Session, *, now: datetime, horizon: datetime
+) -> list[tuple[str, str, datetime]]:
+    """Upcoming Pinnacle-anchored fixtures as (canonical home, away, kickoff).
+
+    The feed carries thousands of worldwide football events; the loop can
+    only alert on the handful the tape anchors (top-5 leagues). Fetching feed
+    odds for anything else spends the free tier's 100 req/h on fixtures that
+    can never produce a verdict. So the poller asks the tape which fixtures
+    have a sharp anchor and requests only those.
+    """
+    from pitchprob.data.normalize import canonical_team_name, odds_api_canonical
+
+    rows = session.execute(
+        select(
+            OddsTick.home_team, OddsTick.away_team, OddsTick.commence_time
+        )
+        .where(
+            OddsTick.bookmaker == "pinnacle",
+            OddsTick.commence_time > now,
+            OddsTick.commence_time <= horizon,
+        )
+        .distinct()
+    ).all()
+    fixtures: list[tuple[str, str, datetime]] = []
+    for home, away, commence in rows:
+        kickoff = commence if commence.tzinfo else commence.replace(tzinfo=UTC)
+        fixtures.append(
+            (
+                canonical_team_name(odds_api_canonical(home)),
+                canonical_team_name(odds_api_canonical(away)),
+                kickoff,
+            )
+        )
+    return fixtures
+
+
+def _resolve_books(client: _IoClient, books: list[str] | None) -> list[str]:
+    """The books to request — those actually selected on the key when None.
+
+    The feed 403s the *whole* request if it names a book the key has not
+    selected, so a hardcoded default is a foot-gun the day the operator
+    changes the selection. Asking the key what it has avoids that entirely.
+    """
+    if books is not None:
+        return books
+    payload = client.selected_bookmakers()
+    if isinstance(payload, dict):
+        selected = payload.get("bookmakers", [])
+        return [str(b) for b in selected]
+    return []
+
+
+@dataclass(frozen=True, slots=True)
+class OddsioSummary:
+    """One sweep of the odds-api.io PL feed into the tape (ADR 0014/0016)."""
+
+    ticks_inserted: int
+    events_in_window: int
+    events_priced: int
+    events_requested: int
+    bookmakers: list[str]
+    stop_reason: str | None
+
+
+#: Free-tier ceiling is 100 requests/hour; one sweep asks once per fixture in
+#: the window, so a wide window near a busy round could brush the limit. Cap
+#: the requests per sweep and report when the cap stops it — the loop runs
+#: often, so a truncated sweep is filled by the next one, not lost.
+DEFAULT_MAX_EVENTS = 40
+
+
+def record_oddsio_snapshot(
+    session: Session,
+    client: _IoClient,
+    *,
+    books: list[str] | None = None,
+    within_hours: int = 48,
+    sport: str = "football",
+    league: str | None = None,
+    max_events: int = DEFAULT_MAX_EVENTS,
+    anchor_only: bool = True,
+    now: datetime | None = None,
+) -> OddsioSummary:
+    """Sweep upcoming PL fixtures on the feed into ``odds_ticks``.
+
+    Unlike ``oddsio record`` (one event by id), this is the scheduled poller:
+    it lists the feed's football events, keeps those kicking off within the
+    window, and appends each selected book's quotes as ``source=odds-api-io``
+    with a single ``observed_at``. That is the fuel the speaking loop and the
+    latency map need. A fixture the feed cannot parse is skipped, never fatal.
+
+    With ``anchor_only`` (the default), only fixtures the tape already anchors
+    (an upcoming Pinnacle price) are requested — the rest can never produce a
+    verdict, so paying for them would burn the free tier's 100 req/h on noise.
+    """
+    from pitchprob.data.adapters.odds_api_io import SOURCE, event_ref, parse_odds
+    from pitchprob.data.normalize import canonical_team_name, odds_api_canonical
+
+    when = now if now is not None else datetime.now(tz=UTC)
+    horizon = when + timedelta(hours=within_hours)
+    resolved_books = _resolve_books(client, books)
+    anchors = (
+        _anchor_fixtures(session, now=when, horizon=horizon) if anchor_only else None
+    )
+
+    def _has_anchor(ref_home: str, ref_away: str, kickoff: datetime) -> bool:
+        if anchors is None:
+            return True
+        home = canonical_team_name(odds_api_canonical(ref_home))
+        away = canonical_team_name(odds_api_canonical(ref_away))
+        return any(
+            home == a_home
+            and away == a_away
+            and abs((kickoff - a_kick).total_seconds()) <= 86400
+            for a_home, a_away, a_kick in anchors
+        )
+
+    events = client.list_events(sport=sport, league=league)
+
+    ticks: list[OddsTickRecord] = []
+    in_window = 0
+    priced = 0
+    requested = 0
+    stop_reason: str | None = None
+    for event in events:
+        try:
+            ref = event_ref(event)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (when <= ref.commence_time <= horizon):
+            continue
+        if not _has_anchor(ref.home_team, ref.away_team, ref.commence_time):
+            continue
+        in_window += 1
+        if requested >= max_events:
+            stop_reason = f"max-events ceiling reached ({requested}/{max_events})"
+            break
+        payload = client.fetch_odds(ref.event_id, bookmakers=resolved_books)
+        requested += 1
+        parsed = parse_odds(payload, observed_at=when)  # type: ignore[arg-type]
+        if parsed:
+            priced += 1
+            ticks.extend(parsed)
+
+    for tick in ticks:
+        session.add(
+            OddsTick(
+                source=SOURCE,
+                sport_key=tick.sport_key,
+                event_id=tick.event_id,
+                commence_time=tick.commence_time,
+                home_team=tick.home_team,
+                away_team=tick.away_team,
+                bookmaker=tick.bookmaker,
+                market=tick.market,
+                selection=tick.selection,
+                line=tick.line,
+                price=Decimal(str(tick.price)),
+                observed_at=tick.observed_at or when,
+            )
+        )
+    return OddsioSummary(
+        ticks_inserted=len(ticks),
+        events_in_window=in_window,
+        events_priced=priced,
+        events_requested=requested,
+        bookmakers=sorted({t.bookmaker for t in ticks}),
+        stop_reason=stop_reason,
+    )
+
+
 def import_tape(session: Session, directory: Path) -> tuple[int, int]:
     """Merge cloud-recorded CSV snapshots into ``odds_ticks``.
 
