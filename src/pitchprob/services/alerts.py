@@ -135,6 +135,42 @@ def format_play_alert(alert: Alert) -> str:
     return "\n".join(lines)
 
 
+#: A representative alert used only by ``format_test_alert`` — fixed numbers
+#: so the operator sees the real layout without a real edge existing.
+_SAMPLE_ALERT = Alert(
+    event_id="sample",
+    home_team="Arsenal",
+    away_team="Everton",
+    commence_time=datetime(2026, 8, 21, 19, 0),
+    market="ou",
+    selection="over",
+    line=Decimal("3.0"),
+    bookmaker="Betclic PL",
+    verdict="UNVERIFIED",
+    edge=0.042,
+    price_quoted=Decimal("2.10"),
+    price_effective=Decimal("1.85"),
+    promo_value=None,
+    anchor_price=Decimal("1.95"),
+    anchor_age=timedelta(hours=6),
+    suggested_stake_pln=Decimal("5"),
+)
+
+
+def format_test_alert() -> str:
+    """A clearly-marked test message, so delivery can be verified pre-season.
+
+    Before the season no real alert fires, so this is the only way to confirm
+    the token and chat actually reach the phone. It says plainly that it is
+    not a betting signal, and shows the real layout underneath.
+    """
+    return (
+        "🔧 TEST — pitchprob watch działa; dostarczanie alertów jest sprawne.\n"
+        "To NIE jest sygnał do gry. Tak wygląda prawdziwy alert:\n\n"
+        + format_play_alert(_SAMPLE_ALERT)
+    )
+
+
 class StdoutNotifier:
     """Prints the message. The default for ``--dry-run`` and for tests."""
 
@@ -146,6 +182,34 @@ class StdoutNotifier:
 SendFn = Callable[[str, dict[str, str]], None]
 
 _TELEGRAM_BASE = "https://api.telegram.org"
+
+#: Telegram's sendMessage rejects text longer than this, so a long payload
+#: (a weekly report) is split into several messages.
+TELEGRAM_MAX_CHARS = 4096
+
+
+def _chunk_text(text: str, limit: int = TELEGRAM_MAX_CHARS) -> list[str]:
+    """Split ``text`` into <=limit pieces, preferring line boundaries."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        while len(line) > limit:  # a single over-long line: hard-split it
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = line if not current else f"{current}\n{line}"
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _default_send(url: str, payload: dict[str, str]) -> None:
@@ -159,19 +223,77 @@ def _default_send(url: str, payload: dict[str, str]) -> None:
 def _scrub_telegram_error(exc: httpx.HTTPError) -> str:
     """A key-free description of a Telegram delivery failure.
 
-    The bot token is in the request path, so neither ``str(exc)`` nor the
-    URL may surface. Status code is safe and is the only fact that helps:
-    401/404 = bad token, 400 = malformed chat id or text.
+    The bot token is in the request *path*, so neither ``str(exc)`` nor the
+    URL may surface. The response *body* is safe (it never carries the token)
+    and it is where the useful reason lives — Telegram returns e.g.
+    ``"chat not found"`` or ``"bot can't send messages to bots"``, which is
+    exactly what an operator with a mistyped chat id needs to see.
     """
     if isinstance(exc, httpx.HTTPStatusError):
+        detail = ""
+        try:
+            description = exc.response.json().get("description")
+        except (ValueError, AttributeError):
+            description = None
+        if description:
+            detail = f": {description}"
         return (
-            f"Telegram delivery failed: HTTP {exc.response.status_code} "
+            f"Telegram delivery failed: HTTP {exc.response.status_code}{detail} "
             "(URL withheld — it carries the bot token)"
         )
     return (
         f"Telegram delivery failed: {type(exc).__name__} "
         "(URL withheld — it carries the bot token)"
     )
+
+
+def parse_chat_ids(updates_payload: dict[str, object]) -> list[tuple[int, str]]:
+    """Chat ids that have messaged the bot, from a getUpdates payload.
+
+    Telegram's sendMessage needs a *numeric* chat id (or an @channel), never
+    the bot's own @username — the commonest first-time mistake. This reads
+    the ids of chats that have written to the bot so the operator can paste
+    the right one into ``PITCHPROB_TELEGRAM_CHAT_ID``.
+    """
+    result = updates_payload.get("result", [])
+    seen: dict[int, str] = {}
+    if isinstance(result, list):
+        for update in result:
+            message = update.get("message") or update.get("channel_post") or {}
+            chat = message.get("chat", {})
+            chat_id = chat.get("id")
+            if chat_id is not None:
+                who = (
+                    chat.get("username")
+                    or chat.get("first_name")
+                    or chat.get("title")
+                    or ""
+                )
+                seen[int(chat_id)] = f"{chat.get('type', '')} {who}".strip()
+    return sorted(seen.items())
+
+
+#: (url) -> json payload. Injected in tests; the default GETs via httpx.
+GetFn = Callable[[str], object]
+
+
+def _default_get(url: str) -> object:
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    response = httpx.get(url, timeout=30.0)
+    response.raise_for_status()
+    return response.json()
+
+
+def discover_chat_ids(
+    token: str, *, get: GetFn | None = None
+) -> list[tuple[int, str]]:
+    """Numeric chat ids that have written to this bot (see parse_chat_ids)."""
+    fetch = get if get is not None else _default_get
+    try:
+        payload = fetch(f"{_TELEGRAM_BASE}/bot{token}/getUpdates")
+    except httpx.HTTPError as exc:
+        raise RuntimeError(_scrub_telegram_error(exc)) from None
+    return parse_chat_ids(payload if isinstance(payload, dict) else {})
 
 
 class TelegramNotifier:
@@ -191,6 +313,7 @@ class TelegramNotifier:
     def send(self, text: str) -> None:
         url = f"{_TELEGRAM_BASE}/bot{self._token}/sendMessage"
         try:
-            self._send(url, {"chat_id": self._chat_id, "text": text})
+            for chunk in _chunk_text(text):
+                self._send(url, {"chat_id": self._chat_id, "text": chunk})
         except httpx.HTTPError as exc:
             raise RuntimeError(_scrub_telegram_error(exc)) from None

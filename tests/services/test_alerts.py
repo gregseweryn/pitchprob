@@ -14,10 +14,13 @@ import httpx
 import pytest
 
 from pitchprob.services.alerts import (
+    TELEGRAM_MAX_CHARS,
     Alert,
     StdoutNotifier,
     TelegramNotifier,
     format_play_alert,
+    format_test_alert,
+    parse_chat_ids,
 )
 from pitchprob.services.scanner import SCANNER_CAVEATS
 
@@ -79,6 +82,31 @@ class TestFormatting:
         assert "10" in text  # anchor age hours
 
 
+class TestSelfTest:
+    def test_test_alert_is_marked_and_not_a_signal(self) -> None:
+        text = format_test_alert()
+        assert "TEST" in text
+        assert "nie jest sygnał" in text.lower()  # not a betting signal
+        assert "Betclic PL" in text  # shows the real layout underneath
+
+    def test_parse_chat_ids_finds_numeric_ids_not_the_bot_username(self) -> None:
+        payload = {
+            "ok": True,
+            "result": [
+                {"message": {"chat": {"id": 12345, "type": "private",
+                                      "username": "greg"}}},
+                {"message": {"chat": {"id": 12345, "type": "private",
+                                      "username": "greg"}}},  # dup collapses
+                {"channel_post": {"chat": {"id": -100, "type": "channel",
+                                           "title": "picks"}}},
+            ],
+        }
+        assert parse_chat_ids(payload) == [(-100, "channel picks"), (12345, "private greg")]
+
+    def test_parse_chat_ids_empty_when_nobody_messaged(self) -> None:
+        assert parse_chat_ids({"ok": True, "result": []}) == []
+
+
 class TestTelegramNotifier:
     def test_token_never_appears_in_a_scrubbed_error(self) -> None:
         token = "123456:SECRET-TOKEN-VALUE"
@@ -93,6 +121,20 @@ class TestTelegramNotifier:
             notifier.send("hello")
         assert token not in str(excinfo.value)
         assert "SECRET-TOKEN-VALUE" not in str(excinfo.value)
+
+    def test_long_text_is_split_under_the_limit(self) -> None:
+        calls: list[str] = []
+
+        def _capture(url: str, payload: dict[str, str]) -> None:
+            calls.append(payload["text"])
+
+        notifier = TelegramNotifier("tok", "chat1", send=_capture)
+        text = "\n".join(f"linia {i} " + "x" * 80 for i in range(300))
+        notifier.send(text)
+        assert len(calls) > 1  # exceeded one message
+        assert all(len(chunk) <= TELEGRAM_MAX_CHARS for chunk in calls)
+        # splits happen on newline boundaries, so nothing is lost
+        assert "\n".join(calls) == text
 
     def test_send_posts_the_text_to_the_chat(self) -> None:
         seen: dict[str, str] = {}
