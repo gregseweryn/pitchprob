@@ -4,10 +4,11 @@ Every command opens its own transactional session; ``_make_downloader`` is a
 seam that tests replace with an offline fake.
 """
 
+import contextlib
 import json as json_lib
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import httpx
 import typer
@@ -43,6 +44,9 @@ from pitchprob.services.recorder import (
     record_snapshot,
     record_snapshot_to_csv,
 )
+
+if TYPE_CHECKING:
+    from pitchprob.services.alerts import Notifier
 
 app = typer.Typer(
     name="pitchprob",
@@ -1496,6 +1500,69 @@ def oddsio_probe(
             typer.echo(f"  {name}  ->  {mapped or '(unmapped, skipped)'}")
 
 
+@oddsio_app.command("poll")
+def oddsio_poll(
+    books: Annotated[
+        str,
+        typer.Option(
+            help="Comma list of feed bookmaker names; empty = the key's "
+            "selected books (avoids a 403 on an unselected book)"
+        ),
+    ] = "",
+    within_hours: Annotated[
+        int, typer.Option(help="Only fixtures kicking off within this window")
+    ] = 48,
+    league: Annotated[
+        str | None, typer.Option(help="Feed league slug to restrict to")
+    ] = None,
+    max_events: Annotated[
+        int, typer.Option(help="Request cap per sweep (free tier: 100 req/h)")
+    ] = 40,
+    all_events: Annotated[
+        bool,
+        typer.Option(
+            "--all-events",
+            help="Request every in-window fixture, not just tape-anchored ones "
+            "(spends far more of the free-tier quota)",
+        ),
+    ] = False,
+) -> None:
+    """Sweep upcoming PL fixtures on the feed into the tape (source=odds-api-io).
+
+    The scheduled poller behind the speaking loop (ADR 0016): run it on the
+    always-on machine every few minutes, denser near kickoff. Feed prices
+    stay UNVERIFIED until quote-check clears them (ADR 0014).
+    """
+    from pitchprob.data.adapters.odds_api_io import scrub_http_error
+    from pitchprob.services.recorder import record_oddsio_snapshot
+
+    configure_logging(get_settings().log_level)
+    client = _oddsio_client()
+    book_list = [b.strip() for b in books.split(",") if b.strip()] or None
+    try:
+        with session_scope() as session:
+            summary = record_oddsio_snapshot(
+                session,
+                client,
+                books=book_list,
+                within_hours=within_hours,
+                league=league,
+                max_events=max_events,
+                anchor_only=not all_events,
+            )
+    except httpx.HTTPError as exc:
+        typer.echo(scrub_http_error(exc))
+        raise typer.Exit(code=1) from None
+    typer.echo(
+        f"swept {summary.events_requested} fixtures in the next {within_hours}h "
+        f"({summary.events_in_window} in window, {summary.events_priced} priced) "
+        f"-> {summary.ticks_inserted} ticks from "
+        f"{', '.join(summary.bookmakers) or '(none)'}"
+    )
+    if summary.stop_reason is not None:
+        typer.echo(f"stopped early: {summary.stop_reason}")
+
+
 @oddsio_app.command("record")
 def oddsio_record(
     event_id: Annotated[str, typer.Option(help="Feed event id")],
@@ -1668,6 +1735,17 @@ def risk_report_command(
     out: Annotated[
         str | None, typer.Option(help="Also write the markdown report here")
     ] = None,
+    notify: Annotated[
+        bool,
+        typer.Option(
+            "--notify",
+            help="Also push the report to Telegram (stdout if no token set)",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(help="With --notify, print instead of pushing to Telegram"),
+    ] = False,
 ) -> None:
     """The weekly report: what the tape says about the bets you placed.
 
@@ -1693,6 +1771,13 @@ def risk_report_command(
         Path(out).write_text(result.report + "\n", encoding="utf-8")
         typer.echo(f"report written to {out}")
     typer.echo(result.report)
+    if notify:
+        try:
+            _build_notifier(dry_run=dry_run).send(result.report)
+        except RuntimeError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1) from None
+        typer.echo("report pushed")
 
 
 @app.command("status")
@@ -1718,6 +1803,145 @@ def status_command() -> None:
     if not result.all_ok:
         raise typer.Exit(code=1)
     typer.echo("all checks passed — the data is current enough to act on")
+
+
+def _build_notifier(*, dry_run: bool) -> "Notifier":
+    """The notifier shared by `watch` and `risk report --notify`.
+
+    Telegram when both credentials are set and not a dry run; stdout
+    otherwise, with a one-line notice so a missing token is never silent.
+    """
+    from pitchprob.services.alerts import StdoutNotifier, TelegramNotifier
+
+    settings = get_settings()
+    if dry_run:
+        return StdoutNotifier()
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        return TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+    typer.echo(
+        "no PITCHPROB_TELEGRAM_BOT_TOKEN/CHAT_ID set — printing to stdout "
+        "(set both to push to Telegram, or pass --dry-run to silence this notice)"
+    )
+    return StdoutNotifier()
+
+
+@app.command("watch")
+def watch_command(
+    interval: Annotated[
+        int, typer.Option(help="Seconds between passes (ignored with --once)")
+    ] = 300,
+    once: Annotated[
+        bool, typer.Option(help="Run a single pass and exit")
+    ] = False,
+    min_edge: Annotated[
+        float,
+        typer.Option(help="Minimum effective edge vs the sharp anchor before an alert"),
+    ] = 0.02,
+    window_hours: Annotated[
+        int, typer.Option(help="How far ahead (hours) to scan for fixtures")
+    ] = 72,
+    book: Annotated[
+        list[str] | None,
+        typer.Option("--book", help="Restrict to these bookmakers (repeatable)"),
+    ] = None,
+    market: Annotated[
+        list[str] | None,
+        typer.Option("--market", help="Restrict to these markets (repeatable)"),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(help="Print alerts to stdout instead of pushing to Telegram"),
+    ] = False,
+    self_test: Annotated[
+        bool,
+        typer.Option(
+            "--self-test",
+            help="Send one clearly-marked test alert and exit — confirms "
+            "delivery works before any real signal exists",
+        ),
+    ] = False,
+    discover_chat: Annotated[
+        bool,
+        typer.Option(
+            "--discover-chat",
+            help="Print the numeric chat ids that have messaged the bot, then "
+            "exit — paste one into PITCHPROB_TELEGRAM_CHAT_ID",
+        ),
+    ] = False,
+) -> None:
+    """The speaking loop (ADR 0016): scan upcoming PL quotes, push GRAJ/LEAD.
+
+    Feed-driven and silent by default — it speaks only when an effective edge
+    clears the threshold, the anchor is fresh, and the bet fits the risk
+    limits (ADR 0015). Feed prices are unvalidated, so they push as UNVERIFIED
+    leads, never an auto-PLAY (ADR 0014). Runs forever unless --once; each
+    standing edge is announced once (the ``sent_alerts`` dedup log).
+    """
+    from time import sleep
+
+    from pitchprob.services.alerts import discover_chat_ids, format_test_alert
+    from pitchprob.services.watch import run_watch
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    if discover_chat:
+        if not settings.telegram_bot_token:
+            typer.echo("PITCHPROB_TELEGRAM_BOT_TOKEN is not set (see .env)")
+            raise typer.Exit(code=1)
+        chats = discover_chat_ids(settings.telegram_bot_token)
+        if not chats:
+            typer.echo(
+                "no chats have messaged the bot yet — open Telegram, send the "
+                "bot any message, then re-run. (chat_id must be numeric, not "
+                "the bot's @username)"
+            )
+            raise typer.Exit(code=1)
+        for chat_id, label in chats:
+            typer.echo(f"chat_id={chat_id}  ({label})")
+        return
+
+    notifier = _build_notifier(dry_run=dry_run)
+
+    if self_test:
+        try:
+            notifier.send(format_test_alert())
+        except RuntimeError as exc:
+            typer.echo(str(exc))
+            typer.echo(
+                "hint: if this is a 403/'chat not found', your chat_id is wrong "
+                "— run `pitchprob watch --discover-chat` for the numeric id"
+            )
+            raise typer.Exit(code=1) from None
+        typer.echo("test alert sent")
+        return
+
+    books = frozenset(book) if book else None
+    markets = frozenset(market) if market else None
+    window = timedelta(hours=window_hours)
+
+    while True:
+        with session_scope() as session:
+            result = run_watch(
+                session,
+                notifier,
+                min_edge=min_edge,
+                window=window,
+                markets=markets,
+                books=books,
+            )
+        typer.echo(
+            f"[{datetime.now(tz=UTC):%Y-%m-%d %H:%M:%S} UTC] "
+            f"scanned {result.events_scanned} events · sent {len(result.alerts)} · "
+            f"{result.suppressed_duplicates} already announced"
+        )
+        if settings.healthchecks_watch_url:
+            # a missed heartbeat must not crash the loop
+            with contextlib.suppress(httpx.HTTPError):
+                httpx.get(settings.healthchecks_watch_url, timeout=10.0)
+        if once:
+            break
+        sleep(interval)
 
 
 def main() -> None:

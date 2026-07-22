@@ -14,6 +14,7 @@ here exists to keep that instrument fed and honest.
 | results + xG refresh (`weekly-refresh.sh`) | **local**, Task Scheduler | Wed + Sat mornings | the matches/xG database lives on this machine; Actions cannot write to it. A missed week loses **nothing** — the next run picks up where the last left off, so local scheduling's fragility is acceptable here and was not for the tape |
 | freshness gate (`pitchprob status`) | local, manual | before every betting session | see below |
 | feed validation (`quote-check log`) | local, manual | whenever placing a bet with the feed key active | 2-3 week bar, ADR 0014 |
+| watch loop (`pitchprob watch`) | **local**, always-on | every few minutes | it must speak the moment a fresh PL lead appears, at a minutes-scale cadence Actions cannot promise; a missed pass loses nothing (ADR 0016) |
 
 ## Weekly refresh
 
@@ -74,6 +75,59 @@ Expect it to fail loudly in pre-season: "no upcoming fixtures" before the
 tape carries 2026/27 rounds is the honest answer, not a bug. Do not bet
 past a red gate — a stale tape means every scan verdicts STALE anyway, and
 an unsettled backlog means the drawdown breaker is flying blind.
+
+## The speaking loop (ADR 0016)
+
+`pitchprob watch` is the machine's mouth: it scans upcoming fixtures the tape
+anchors, pulls Polish-book quotes from the odds-api.io feed, and pushes an
+alert only when an effective edge clears the threshold, the anchor is fresh,
+and the bet fits the risk limits. Everything else is silence — and silence is
+the expected output of most passes (the tax sits in the prices).
+
+```bash
+uv run pitchprob watch --once --dry-run     # one pass, print instead of push
+uv run pitchprob watch                       # forever, push to Telegram
+```
+
+Telegram delivery needs `PITCHPROB_TELEGRAM_BOT_TOKEN` and
+`PITCHPROB_TELEGRAM_CHAT_ID` in `.env` (gitignored). Without them the loop
+prints to stdout and says so. Feed leads arrive as `UNVERIFIED` — a prompt to
+check the book's own screen, not an authorised bet — until `quote-check`
+promotes the feed (ADR 0014). Each standing lead is announced once
+(`sent_alerts`).
+
+Run it always-on beside the tape. On Windows, register it the same way as the
+weekly refresh, dropping the schedule so it runs continuously:
+
+```powershell
+schtasks /Create /TN "pitchprob-watch" /SC ONSTART `
+  /TR "wsl.exe -d Ubuntu -- bash -lc 'cd /home/greg/projects/trading && uv run pitchprob watch --interval 300'"
+```
+
+Set `PITCHPROB_HEALTHCHECKS_WATCH_URL` to a healthchecks.io ping URL and a
+silently dead loop raises an alarm. The loop is DB-only per pass except for
+the feed already on the tape and the Telegram push, so it cannot hang on a
+slow upstream API.
+
+**The feed poller is the loop's fuel line.** The loop verdicts PL prices, but
+something has to put them on the tape. `pitchprob oddsio poll` sweeps the
+odds-api.io feed for upcoming fixtures and appends them as `source=odds-api-io`:
+
+```bash
+uv run pitchprob oddsio poll --within-hours 72     # anchored fixtures only
+```
+
+By default it requests **only fixtures the tape already anchors** (an upcoming
+Pinnacle price), because the feed carries thousands of worldwide events the
+loop could never verdict and the free tier is 100 requests/hour. Pre-season,
+with no top-5 fixtures anchored yet, it correctly requests nothing. It reads
+the key's *selected* books automatically (`oddsio select --show`) — naming an
+unselected book 403s the whole sweep. Run it on a cron beside the watch daemon
+(every ~15 min; denser near kickoff). Keep the two cadences under 100 req/h.
+
+**Nothing to push before the feed is attached.** Until the odds-api.io key is
+in `.env` and populating `odds_ticks`, the loop runs and correctly finds
+nothing — the honest answer, not a fault.
 
 ## After every round: settle, and grow the name map
 

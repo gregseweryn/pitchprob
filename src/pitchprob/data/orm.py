@@ -315,7 +315,10 @@ class OddsTick(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String(32), default="the-odds-api")
-    sport_key: Mapped[str] = mapped_column(String(48), index=True)
+    # 96, not 48: odds-api.io league slugs run long (e.g.
+    # "international-clubs-uefa-champions-league-women-qualification" = 61).
+    # The tape records what the source said; it does not truncate provenance.
+    sport_key: Mapped[str] = mapped_column(String(96), index=True)
     event_id: Mapped[str] = mapped_column(String(64), index=True)
     commence_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     home_team: Mapped[str] = mapped_column(String(64))
@@ -326,3 +329,28 @@ class OddsTick(Base):
     line: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     price: Mapped[Decimal] = mapped_column(Numeric(8, 3))
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class SentAlert(Base):
+    """Dedup log for the "speaking loop" (P0, ADR 0016).
+
+    One row per alert the watch loop has already pushed, keyed by the fixture
+    selection and the book it fired for. The loop reads this table before
+    sending so a standing edge is announced once, not on every pass — a
+    machine that re-pings the same lead every few minutes trains the operator
+    to ignore it, which defeats the point of alerting at all. ``verdict`` and
+    ``edge`` are kept for the record and for the weekly report; they are not
+    part of the dedup key (an edge that drifts a little is the same lead).
+    """
+
+    __tablename__ = "sent_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), index=True)
+    market: Mapped[str] = mapped_column(String(16))
+    selection: Mapped[str] = mapped_column(String(16))
+    line: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    bookmaker: Mapped[str] = mapped_column(String(32))
+    verdict: Mapped[str] = mapped_column(String(16))
+    edge: Mapped[float]
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

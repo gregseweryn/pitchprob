@@ -19,7 +19,7 @@ run|compare` registry with paired significance). Data: 21,589 matches (top-5
 European leagues 2014/15–2025/26, football-data.co.uk; Pinnacle close covers
 20,733 and open 20,717 of them), 99.98% Understat xG coverage, 40,500
 API-Football injury records (seasons 2022–24). ~700 tests, mypy --strict,
-15 ADRs in `docs/adr/` (read them before changing anything they cover).
+16 ADRs in `docs/adr/` (read them before changing anything they cover).
 
 The syndicate-transformation roadmap (approved 2026-07-18, plan file
 `~/.claude/plans/you-are-a-principal-proud-patterson.md`) continues: Phase 1
@@ -92,6 +92,7 @@ uv run pitchprob record-corners --league E0  # corners tape, T-26h (ADR 0014)
 uv run pitchprob study latency               # who copies the sharp line last
 uv run pitchprob quote-check log|report      # validate the odds-api.io feed
 uv run pitchprob risk status|report          # limits, breaker, weekly report
+uv run pitchprob watch --once --dry-run       # the speaking loop: push GRAJ/LEAD (ADR 0016)
 uv run pitchprob status                      # pre-round freshness gate
 bash scripts/start.sh                        # gate + API + dashboard + browser
 uv run pitchprob oddsio select --show        # which PL books the feed key has
@@ -116,7 +117,28 @@ cd frontend && npm run dev               # dashboard against local API
   in `.env` (`PITCHPROB_API_FOOTBALL_KEY`, gitignored — never commit).
 - Frontend fonts via the `geist` npm package (no build-time Google fetch).
 
-## Handoff — state and next task (updated 2026-07-21)
+## Handoff — state and next task (updated 2026-07-22)
+
+**P0 "speaking loop" built (ADR 0016).** The system can now *initiate*: a
+watch loop (`services/watch.py`) + notifier (`services/alerts.py`) +
+`pitchprob watch`. It scans upcoming tape-anchored fixtures, pulls PL quotes
+from the odds-api.io feed (`scanner.feed_quotes`), and pushes a Polish
+Telegram alert **only** when an effective edge clears the threshold, the
+anchor is fresh, and a flat stake fits the ADR 0015 risk limits — silent
+otherwise (silence is the common case). Feed leads push as `UNVERIFIED`
+(check the book's screen), never auto-`PLAY`; each standing lead is announced
+once (`sent_alerts`, migration `f2a4c6e8b0d1`). Telegram token/chat + an
+optional healthchecks.io URL live in `.env`
+(`PITCHPROB_TELEGRAM_BOT_TOKEN`/`_CHAT_ID`/`PITCHPROB_HEALTHCHECKS_WATCH_URL`).
+Run always-on beside the tape (WSL cron / Task Scheduler — RUNBOOK). **It
+finds nothing until the odds-api.io key is attached and the feed populates
+`odds_ticks` — that is correct, not a fault.** Sharp price still decides; the
+loop adds no judgment. `make check` green.
+
+**Blocked on you (unchanged, now higher-leverage):** sign up at odds-api.io,
+put `PITCHPROB_ODDS_API_IO_KEY` in `.env` + repo secrets, select Betclic PL +
+STS PL. Until then the speaking loop, the feed and the latency map have no
+data; everything else runs.
 
 **Operational now:** the odds tape records itself daily via GitHub Actions
 (`.github/workflows/record-odds.yml`, 08:00 UTC, commits
@@ -234,10 +256,18 @@ overflowed the viewport horizontally on **every** page at 390px (pre-
 existing; five nav items made it certain — it now wraps), and repeated
 quote rows lost their labels when the grid stacked on mobile.
 
-**Next task — two open items:** (a) rerun the M5 absence A/B now that A1 is
-fixed; the published null is unsupported in either direction and it gates a
-spend decision; (b) extend `_ODDS_API_OVERRIDES` in `data/normalize.py`
-from the first real "unmatched" reports once the season starts.
+**M5 rerun done (2026-07-22).** The absence A/B was re-run and registered with
+the A1 fix live (GBM E0 2023-08→2025-06, 760 fixtures, 5000 resamples): every
+primary endpoint null (log-loss Δ−0.0011 p=0.71, RPS p=0.99, ROI p=0.31,
+exec-CLV p=0.47), matching the published table. The null is now backed by a
+stored run, not a description; the spend gate (paid player data / LLM news)
+stays closed on measured evidence. A1 fully closed.
+
+**Next task:** extend `_ODDS_API_OVERRIDES` in `data/normalize.py` from the
+first real "unmatched" reports once the season starts. Open research lanes
+(evidence-gated, expected null): CLV-conditioned training (model =
+f(sharp-fair, residual) — the only modelling path with a shot at +CLV),
+non-transitivity / bivariate-Poisson / TabPFN ablations.
 
 **User context:** Polish operator — PL-licensed books only, communicates in
 Polish. Docs, code, tests and API verdict *values* stay English; the
