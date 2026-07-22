@@ -358,11 +358,17 @@ class TestLogPickEndpoint:
     def test_the_tax_free_allowance_still_guards(
         self, client: TestClient, session: Session
     ) -> None:
+        # §3 ust. 4: the guard fires only once the 1,000 PLN limit is fully
+        # spent (a straddling stake qualifies in full — ledger tests cover
+        # that arm); override_risk keeps the risk layer out of the way so the
+        # 400 is the allowance and nothing else.
         _seed_symmetric_totals(session)
         client.post(
             "/v1/ledger/picks",
-            json=self._body(stake_pln="998", override_risk=True),
+            json=self._body(stake_pln="1000", override_risk=True),
         )
-        response = client.post("/v1/ledger/picks", json=self._body())
+        response = client.post(
+            "/v1/ledger/picks", json=self._body(override_risk=True)
+        )
         assert response.status_code == 400
         assert "allowance" in response.json()["detail"]

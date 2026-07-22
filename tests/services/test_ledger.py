@@ -174,12 +174,17 @@ class TestLogPick:
         _log_over_pick(session, stake_pln=Decimal("5"), tax_free=False)
         assert tax_free_allowance(session, "betclic").used == Decimal("7")
 
-    def test_tax_free_beyond_the_allowance_is_refused(
+    def test_tax_free_straddling_the_limit_qualifies_in_full(
         self, session: Session
     ) -> None:
+        # §3 ust. 4: with 2 PLN of allowance left, the whole 5 PLN bet is
+        # still tax-free; only a spent limit refuses the *next* one.
         _log_over_pick(session, stake_pln=Decimal("998"))
+        straddle = _log_over_pick(session, stake_pln=Decimal("5"))
+        assert straddle.tax_free is True
+        assert straddle.price_effective == Decimal("2.10")
         with pytest.raises(ValueError, match="allowance"):
-            _log_over_pick(session, stake_pln=Decimal("5"))
+            _log_over_pick(session, stake_pln=Decimal("4"))
 
     @pytest.mark.parametrize(
         "overrides",

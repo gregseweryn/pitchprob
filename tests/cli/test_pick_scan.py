@@ -186,13 +186,20 @@ class TestPickCommands:
             "--market", "ou", "--selection", "over", "--line", "3.0",
             "--book", "betclic", "--price", "2.10", "--tax-free",
         ]
-        # Exhausting a 1,000 PLN allowance needs a stake the risk layer would
-        # otherwise refuse, so this arm overrides it deliberately — the
+        # Exhausting a 1,000 PLN allowance needs stakes the risk layer would
+        # otherwise refuse, so these arms override it deliberately — the
         # allowance guard is what is under test here, not the limits.
         assert runner.invoke(
             cli_main.app, [*base, "--stake", "998", "--override-risk"]
         ).exit_code == 0
-        result = runner.invoke(cli_main.app, [*base, "--stake", "5"])
+        # §3 ust. 4: 2 PLN of allowance left → the straddling 5 PLN bet is
+        # still tax-free in full; only then is the limit spent.
+        assert runner.invoke(
+            cli_main.app, [*base, "--stake", "5", "--override-risk"]
+        ).exit_code == 0
+        result = runner.invoke(
+            cli_main.app, [*base, "--stake", "4", "--override-risk"]
+        )
         assert result.exit_code != 0
         assert "allowance" in result.output
 
